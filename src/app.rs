@@ -63,11 +63,12 @@ impl CelerApp {
         let workspace_mgr = WorkspaceManager::new();
         let cols = 100;
         let rows = 30;
-        let renderer = TextRenderer::with_fallbacks(
+        let renderer = TextRenderer::with_options(
             &config.font.family,
             &config.font.fallback_families,
             config.font.size,
             config.font.line_height,
+            config.font.ligatures,
         );
 
         Self {
@@ -89,11 +90,12 @@ impl CelerApp {
 
     pub fn update_renderer(&mut self) {
         let effective_size = (self.config.font.size * self.scale_factor).max(8.0);
-        self.renderer = TextRenderer::with_fallbacks(
+        self.renderer = TextRenderer::with_options(
             &self.config.font.family,
             &self.config.font.fallback_families,
             effective_size,
             self.config.font.line_height,
+            self.config.font.ligatures,
         );
     }
 
@@ -853,6 +855,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     let nbg_u32 = resolve_color(nbg, default_fg, default_bg);
                                     let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
                                     if nfg_u32 != fg_u32 || nbg_u32 != bg_u32 {
+                                        let prev_char = span.chars().last().unwrap_or(c);
+                                        if is_ligature_punctuation(prev_char) && is_ligature_punctuation(nc) && nbg_u32 == bg_u32 {
+                                            span.push(nc);
+                                            col += 1;
+                                            continue;
+                                        }
                                         break;
                                     }
                                     span.push(nc);
@@ -993,4 +1001,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+#[inline]
+fn is_ligature_punctuation(c: char) -> bool {
+    matches!(c, '-' | '>' | '=' | '<' | '!' | ':' | '/' | '*' | '.' | '|' | '&' | '~' | '#' | '+' | '%' | '?' | '^')
 }

@@ -8,6 +8,7 @@ pub struct TextRenderer {
     pub line_height: f32,
     pub cell_width: f32,
     pub cell_height: f32,
+    pub ligatures: bool,
 }
 
 impl TextRenderer {
@@ -16,6 +17,16 @@ impl TextRenderer {
     }
 
     pub fn with_fallbacks(family: &str, fallbacks: &[String], size: f32, line_height_factor: f32) -> Self {
+        Self::with_options(family, fallbacks, size, line_height_factor, true)
+    }
+
+    pub fn with_options(
+        family: &str,
+        fallbacks: &[String],
+        size: f32,
+        line_height_factor: f32,
+        ligatures: bool,
+    ) -> Self {
         let mut font_system = FontSystem::new();
 
         if let Some(base_dirs) = directories::BaseDirs::new() {
@@ -69,6 +80,7 @@ impl TextRenderer {
             line_height,
             cell_width,
             cell_height: line_height,
+            ligatures,
         }
     }
 
@@ -77,7 +89,8 @@ impl TextRenderer {
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let attrs = Attrs::new().family(Family::Name(&self.font_family));
 
-        buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
+        let shaping = if self.ligatures { Shaping::Advanced } else { Shaping::Basic };
+        buffer.set_text(&mut self.font_system, text, attrs, shaping);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
         let mut glyph_count = 0;
@@ -106,7 +119,8 @@ impl TextRenderer {
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let attrs = Attrs::new().family(Family::Name(&self.font_family));
 
-        buffer.set_text(&mut self.font_system, text, attrs, Shaping::Advanced);
+        let shaping = if self.ligatures { Shaping::Advanced } else { Shaping::Basic };
+        buffer.set_text(&mut self.font_system, text, attrs, shaping);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
         let r = (color >> 16) & 0xFF;
