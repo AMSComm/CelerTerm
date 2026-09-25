@@ -425,9 +425,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
                 {
                     let _ = session.writer.write_all(text.as_bytes());
-                    // If Space was pressed to commit preedit in Vietnamese IME, also output the Space
-                    if had_preedit && !text.ends_with(' ') && is_space_key_down() {
-                        let _ = session.writer.write_all(b" ");
+                    // If text was committed from preedit, also send the commit key (Space, Return, Tab, punctuation)
+                    // unless text already contains or ends with that suffix
+                    if had_preedit && let Some(extra) = get_ime_commit_extra() {
+                        let extra_str = String::from_utf8_lossy(&extra);
+                        if !text.ends_with(extra_str.as_ref()) {
+                            let _ = session.writer.write_all(&extra);
+                        }
                     }
                     let _ = session.writer.flush();
                 }
@@ -1075,19 +1079,19 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     let preedit_len = preedit_text.chars().count();
                                     let preedit_w = (preedit_len as f32 * cell_w).max(cell_w);
 
-                                    // IME composition background highlight
+                                    // IME composition background (matches terminal background)
                                     TextRenderer::draw_rect(
                                         &mut buffer,
                                         width,
                                         height,
                                         cursor_x as usize,
                                         cursor_y as usize,
-                                        preedit_w as usize,
-                                        cell_h as usize,
-                                        0x00283457,
+                                        preedit_w.ceil() as usize,
+                                        cell_h.ceil() as usize,
+                                        default_bg,
                                     );
 
-                                    // IME composition text
+                                    // IME composition text (matches terminal foreground color)
                                     self.renderer.draw_text(
                                         &mut buffer,
                                         width,
@@ -1095,20 +1099,35 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         cursor_x,
                                         cursor_y,
                                         preedit_text,
-                                        0x00FFFFFF,
+                                        default_fg,
                                     );
 
-                                    // Neon blue underline for active preedit
+                                    // Subtle 1px underline for active preedit
                                     TextRenderer::draw_rect(
                                         &mut buffer,
                                         width,
                                         height,
                                         cursor_x as usize,
-                                        (cursor_y + cell_h - 2.0) as usize,
+                                        (cursor_y + cell_h - 1.0).round() as usize,
                                         preedit_w as usize,
-                                        2,
+                                        1,
                                         0x007AA2F7,
                                     );
+
+                                    // Active cursor positioned immediately after the preedit text
+                                    let active_cursor_x = cursor_x + preedit_w;
+                                    if active_cursor_x + cell_w <= width as f32 {
+                                        TextRenderer::draw_rect(
+                                            &mut buffer,
+                                            width,
+                                            height,
+                                            active_cursor_x as usize,
+                                            cursor_y as usize,
+                                            cell_w as usize,
+                                            cell_h as usize,
+                                            0x007AA2F7,
+                                        );
+                                    }
                                 } else {
                                     let under_char = active_session.screen.get_cell_char(cursor_col, cursor_row);
 
@@ -1187,18 +1206,60 @@ fn is_ligature_punctuation(c: char) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn is_space_key_down() -> bool {
+fn get_ime_commit_extra() -> Option<Vec<u8>> {
+    use objc2_app_kit::{NSApplication, NSEventType};
+    use objc2_foundation::MainThreadMarker;
+
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
         fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
     }
-    unsafe {
-        // 0 = kCGEventSourceStateCombinedSessionState, 49 = kVK_Space
-        CGEventSourceKeyState(0, 49)
+
+    let is_key_down = |k: u16| -> bool {
+        unsafe {
+            // 0 = kCGEventSourceStateCombinedSessionState, 1 = kCGEventSourceStateHIDSystemState
+            CGEventSourceKeyState(0, k) || CGEventSourceKeyState(1, k)
+        }
+    };
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        if let Some(event) = app.currentEvent() {
+            unsafe {
+                if event.r#type() == NSEventType::KeyDown {
+                    let code = event.keyCode();
+                    if code == 49 { // Space (kVK_Space)
+                        return Some(b" ".to_vec());
+                    } else if code == 36 || code == 76 { // Return / KeypadEnter
+                        return Some(b"\r".to_vec());
+                    } else if code == 48 { // Tab
+                        return Some(b"\t".to_vec());
+                    } else if let Some(chars) = event.characters() {
+                        let s = chars.to_string();
+                        if s.len() == 1 {
+                            let c = s.chars().next().unwrap();
+                            if c.is_ascii_punctuation() {
+                                return Some(s.into_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+
+    // Hardware state fallback if event was already popped
+    if is_key_down(49) {
+        return Some(b" ".to_vec());
+    }
+    if is_key_down(36) || is_key_down(76) {
+        return Some(b"\r".to_vec());
+    }
+
+    None
 }
 
 #[cfg(not(target_os = "macos"))]
-fn is_space_key_down() -> bool {
-    false
+fn get_ime_commit_extra() -> Option<Vec<u8>> {
+    None
 }
