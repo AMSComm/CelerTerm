@@ -24,7 +24,7 @@ pub struct WindowConfig {
 impl Default for WindowConfig {
     fn default() -> Self {
         Self {
-            hide_traffic_lights: false,
+            hide_traffic_lights: true,
             tabs_in_titlebar: true,
             decorations: true,
             opacity: 1.0,

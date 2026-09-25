@@ -52,7 +52,7 @@ fallback_families = [
 [window]
 padding_x = 8.0
 padding_y = 4.0
-hide_traffic_lights = false
+hide_traffic_lights = true
 tabs_in_titlebar = true
 opacity = 1.0
 

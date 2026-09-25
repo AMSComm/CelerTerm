@@ -25,6 +25,7 @@ pub fn calculate_header_layout(
     hide_traffic_lights: bool,
     tabs_in_titlebar: bool,
     scale_factor: f32,
+    char_width: f32,
 ) -> TabHeaderLayout {
     if !tabs_in_titlebar {
         return TabHeaderLayout {
@@ -35,7 +36,8 @@ pub fn calculate_header_layout(
     }
 
     let scale = scale_factor.max(1.0);
-    let height = (38.0 * scale).round();
+    // Compact, space-saving height like WezTerm (26px scaled)
+    let height = (26.0 * scale).round();
     // On macOS, traffic lights take ~78-82pt from the left when visible.
     let start_x = if cfg!(target_os = "macos") && !hide_traffic_lights {
         (82.0 * scale).round()
@@ -43,30 +45,35 @@ pub fn calculate_header_layout(
         (8.0 * scale).round()
     };
 
-    let tab_padding = (4.0 * scale).round();
-    let btn_width = (28.0 * scale).round();
-    let max_tab_width = (180.0 * scale).round();
-    let available_w = (window_width - start_x - btn_width - tab_padding * 2.0).max(10.0);
-    let tab_width = max_tab_width.min(available_w / (tabs.len().max(1) as f32));
+    let btn_width = (24.0 * scale).round();
+    let available_w = (window_width - start_x - btn_width - (16.0 * scale)).max(10.0);
+    let max_per_tab = (available_w / (tabs.len().max(1) as f32)).max(20.0);
+
     let mut current_x = start_x;
     let mut tab_rects = Vec::new();
 
-    for (id, _) in tabs {
+    for (id, title) in tabs {
+        let text_chars = title.chars().count().max(1);
+        let text_w = (text_chars as f32 * char_width).round();
+        // Dynamic width: text width + close button area & margins (32px scaled)
+        let desired_w = (text_w + (32.0 * scale).round()).clamp(50.0 * scale, 240.0 * scale);
+        let tab_w = desired_w.min(max_per_tab);
+
         let rect = Rect {
             x: current_x,
-            y: tab_padding,
-            width: (tab_width - tab_padding).max(10.0),
-            height: height - tab_padding * 2.0,
+            y: (1.0 * scale).round(),
+            width: tab_w,
+            height: height - (2.0 * scale).round(),
         };
         tab_rects.push((id.clone(), rect));
-        current_x += tab_width;
+        current_x += tab_w;
     }
 
     let add_button_rect = Rect {
-        x: current_x + tab_padding,
-        y: tab_padding,
+        x: current_x + (4.0 * scale).round(),
+        y: (1.0 * scale).round(),
         width: btn_width,
-        height: height - tab_padding * 2.0,
+        height: height - (2.0 * scale).round(),
     };
 
     TabHeaderLayout {

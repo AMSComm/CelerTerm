@@ -6,7 +6,7 @@ fn test_default_config() {
     
     // Window defaults
     assert!(config.window.tabs_in_titlebar);
-    assert!(!config.window.hide_traffic_lights);
+    assert!(config.window.hide_traffic_lights);
     assert!(config.window.decorations);
     
     // macOS defaults

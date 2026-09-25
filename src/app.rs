@@ -134,7 +134,7 @@ impl CelerApp {
 
     pub fn recalculate_grid(&mut self, width: f32, height: f32) {
         let scale = self.scale_factor;
-        let header_h = if self.config.window.tabs_in_titlebar { (38.0 * scale).round() } else { 0.0 };
+        let header_h = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
         let pad_x = (self.config.window.padding_x * scale).round();
         let pad_y = (self.config.window.padding_y * scale).round();
         let term_h = (height - header_h - pad_y * 2.0).max(10.0);
@@ -417,12 +417,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     self.ime_preedit = None;
                     return;
                 }
+                let had_preedit = self.ime_preedit.is_some();
                 self.ime_preedit = None;
+
                 // Send committed IME text (Vietnamese / Japanese) to the active tab's PTY
                 if let Some(active_id) = self.active_tab_id()
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
                 {
                     let _ = session.writer.write_all(text.as_bytes());
+                    // If Space was pressed to commit preedit in Vietnamese IME, also output the Space
+                    if had_preedit && !text.ends_with(' ') && is_space_key_down() {
+                        let _ = session.writer.write_all(b" ");
+                    }
                     let _ = session.writer.flush();
                 }
                 if let Some(ref window) = self.window {
@@ -454,7 +460,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 {
                     if session.screen.is_mouse_mode() {
                         let pad_x = (self.config.window.padding_x * self.scale_factor).round();
-                        let header_h = if self.config.window.tabs_in_titlebar { (38.0 * self.scale_factor).round() } else { 0.0 };
+                        let header_h = if self.config.window.tabs_in_titlebar { (26.0 * self.scale_factor).round() } else { 0.0 };
                         let pad_y = (self.config.window.padding_y * self.scale_factor).round();
                         let start_y = header_h + pad_y;
 
@@ -463,23 +469,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let row = (((self.mouse_pos.1 as f32 - start_y) / self.renderer.cell_height).floor() as i32 + 1)
                             .clamp(1, session.screen.size.lines as i32) as usize;
 
-                        // SGR mouse mode: button 65 = wheel down, button 64 = wheel up
-                        let btn = if lines > 0 { 65 } else { 64 };
+                        // SGR mouse mode: button 64 = wheel up (lines > 0), button 65 = wheel down (lines < 0)
+                        let btn = if lines > 0 { 64 } else { 65 };
                         let payload = format!("\x1b[<{};{};{}M", btn, col, row);
                         for _ in 0..lines.abs().min(5) {
                             let _ = session.writer.write_all(payload.as_bytes());
                         }
                         let _ = session.writer.flush();
                     } else if session.screen.is_alt_screen() {
-                        // Alternate screen without mouse mode: lines > 0 is scroll down (Down Arrow), lines < 0 is scroll up (Up Arrow)
-                        let arrow = if lines > 0 { b"\x1b[B" } else { b"\x1b[A" };
+                        // Alternate screen without mouse mode: lines > 0 is scroll up (Up Arrow), lines < 0 is scroll down (Down Arrow)
+                        let arrow = if lines > 0 { b"\x1b[A" } else { b"\x1b[B" };
                         for _ in 0..lines.abs().min(5) {
                             let _ = session.writer.write_all(arrow);
                         }
                         let _ = session.writer.flush();
                     } else {
-                        // Normal shell: lines < 0 scrolls up into history (-lines > 0), lines > 0 scrolls down to prompt (-lines < 0)
-                        session.screen.scroll_display(-lines);
+                        // Normal shell: lines > 0 scrolls up into history (+lines), lines < 0 scrolls down to prompt (-lines)
+                        session.screen.scroll_display(lines);
                         if let Some(ref win) = self.window {
                             win.request_redraw();
                         }
@@ -494,9 +500,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 let window = self.window.clone();
                 if let Some(ref window) = window {
                     let size = window.inner_size();
-                    let tabs: Vec<(String, String)> = self.workspace_mgr.get_active_workspace()
-                        .map(|ws| ws.tabs.iter().map(|t| (t.id.clone(), t.title.clone())).collect())
+                    let raw_tabs = self.workspace_mgr.get_active_workspace()
+                        .map(|ws| ws.tabs.clone())
                         .unwrap_or_default();
+                    let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
+                        (t.id.clone(), format!("{}. {}", idx + 1, t.title))
+                    }).collect();
 
                     let header = calculate_header_layout(
                         size.width as f32,
@@ -504,6 +513,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         self.config.window.hide_traffic_lights,
                         self.config.window.tabs_in_titlebar,
                         self.scale_factor,
+                        self.renderer.cell_width,
                     );
 
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
@@ -514,7 +524,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         for (tab_id, rect) in &header.tab_rects {
                             if rect.contains(mx, my) {
                                 // Middle-click or clicking on 'x' at tab's right edge closes tab
-                                let close_area_w = (24.0 * self.scale_factor).max(18.0);
+                                let close_area_w = (16.0 * self.scale_factor).max(12.0);
                                 if button == MouseButton::Middle || mx >= rect.x + rect.width - close_area_w {
                                     self.tab_sessions.remove(tab_id);
                                     let _ = self.workspace_mgr.close_tab(tab_id);
@@ -775,14 +785,20 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         Err(_) => return,
                     };
 
+                    #[cfg(target_os = "macos")]
+                    apply_traffic_lights_visibility(window, self.config.window.hide_traffic_lights);
+
                     // 1. Fill terminal background (Tokyo Night navy #1a1b26)
                     let bg_color = 0x001A1B26;
                     buffer.fill(bg_color);
 
                     // 2. Render Tab Header
-                    let tabs: Vec<(String, String)> = self.workspace_mgr.get_active_workspace()
-                        .map(|ws| ws.tabs.iter().map(|t| (t.id.clone(), t.title.clone())).collect())
+                    let raw_tabs = self.workspace_mgr.get_active_workspace()
+                        .map(|ws| ws.tabs.clone())
                         .unwrap_or_default();
+                    let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
+                        (t.id.clone(), format!("{}. {}", idx + 1, t.title))
+                    }).collect();
 
                     let active_tab_id = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.active_tab_id.clone())
@@ -798,6 +814,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         self.config.window.hide_traffic_lights,
                         self.config.window.tabs_in_titlebar,
                         self.scale_factor,
+                        self.renderer.cell_width,
                     );
 
                     if header.height > 0.0 {
@@ -847,7 +864,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             );
 
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
-                            let tab_text_x = rect.x + (8.0 * self.scale_factor);
+                            let tab_text_x = rect.x + (6.0 * self.scale_factor);
                             let tab_title = tabs.get(idx).map(|t| t.1.as_str()).unwrap_or("Tab");
                             self.renderer.draw_text(
                                 &mut buffer,
@@ -859,16 +876,33 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 tab_fg,
                             );
 
-                            if rect.width > (40.0 * self.scale_factor) {
+                            if rect.width > (36.0 * self.scale_factor) {
                                 self.renderer.draw_text(
                                     &mut buffer,
                                     width,
                                     height,
-                                    rect.x + rect.width - (18.0 * self.scale_factor),
+                                    rect.x + rect.width - (14.0 * self.scale_factor),
                                     tab_text_y,
                                     "x",
                                     if is_active { 0x00787C99 } else { 0x00414868 },
                                 );
+                            }
+
+                            // Draw thin separator '|' between adjacent tabs
+                            if idx + 1 < header.tab_rects.len() {
+                                let sep_x = (rect.x + rect.width).round() as usize;
+                                if sep_x < width {
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        sep_x,
+                                        rect.y as usize + (3.0 * self.scale_factor) as usize,
+                                        1,
+                                        (rect.height - (6.0 * self.scale_factor)).max(4.0) as usize,
+                                        0x003B4261,
+                                    );
+                                }
                             }
                         }
 
@@ -1150,4 +1184,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 #[inline]
 fn is_ligature_punctuation(c: char) -> bool {
     matches!(c, '-' | '>' | '=' | '<' | '!' | ':' | '/' | '*' | '.' | '|' | '&' | '~' | '#' | '+' | '%' | '?' | '^')
+}
+
+#[cfg(target_os = "macos")]
+fn is_space_key_down() -> bool {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
+    }
+    unsafe {
+        // 0 = kCGEventSourceStateCombinedSessionState, 49 = kVK_Space
+        CGEventSourceKeyState(0, 49)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_space_key_down() -> bool {
+    false
 }
