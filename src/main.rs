@@ -1,3 +1,3 @@
-fn main() {
-    println!("celerterm - minimal high performance terminal");
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    celerterm::app::run()
 }
