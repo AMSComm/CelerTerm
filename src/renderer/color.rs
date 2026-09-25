@@ -32,11 +32,21 @@ fn named_to_rgb(named: NamedColor, default_fg: u32, default_bg: u32) -> u32 {
         NamedColor::BrightCyan => 0x7dcfff,
         NamedColor::BrightWhite => 0xc0caf5,
 
+        // Dim ANSI colors
+        NamedColor::DimBlack => 0x0e0f15,
+        NamedColor::DimRed => 0xa54e5f,
+        NamedColor::DimGreen => 0x698a47,
+        NamedColor::DimYellow => 0x967545,
+        NamedColor::DimBlue => 0x516ca5,
+        NamedColor::DimMagenta => 0x7d67a5,
+        NamedColor::DimCyan => 0x538aa8,
+        NamedColor::DimWhite => 0x70768e,
+
         NamedColor::Foreground => default_fg,
         NamedColor::Background => default_bg,
         NamedColor::Cursor => 0x7aa2f7,
         NamedColor::DimForeground => 0x565f89,
-        _ => default_fg,
+        NamedColor::BrightForeground => 0xc0caf5,
     }
 }
 

@@ -1,8 +1,10 @@
+use std::fmt::Write;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, GridCell, Row};
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TermSize {
@@ -122,20 +124,12 @@ impl TermScreen {
         for h in start_h..history_lines {
             let offset = (history_lines - h) as i32;
             let line_idx = Line(-offset);
-            let mut s = String::new();
-            for col in 0..self.size.columns {
-                s.push(grid[line_idx][Column(col)].c);
-            }
-            lines.push(s.trim_end().to_string());
+            lines.push(Self::serialize_row_to_ansi(&grid[line_idx], self.size.columns));
         }
 
         for v in 0..visible_lines {
             let line_idx = Line(v as i32);
-            let mut s = String::new();
-            for col in 0..self.size.columns {
-                s.push(grid[line_idx][Column(col)].c);
-            }
-            lines.push(s.trim_end().to_string());
+            lines.push(Self::serialize_row_to_ansi(&grid[line_idx], self.size.columns));
         }
 
         while let Some(last) = lines.last() {
@@ -149,6 +143,178 @@ impl TermScreen {
         lines
     }
 
+    fn serialize_row_to_ansi(row: &Row<Cell>, cols: usize) -> String {
+        let last_col = match (0..cols).rposition(|c| !row[Column(c)].is_empty()) {
+            Some(idx) => idx,
+            None => return String::new(),
+        };
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        struct StyleState {
+            fg: Color,
+            bg: Color,
+            bold: bool,
+            dim: bool,
+            italic: bool,
+            underline: bool,
+            double_underline: bool,
+            inverse: bool,
+            strikeout: bool,
+        }
+
+        impl Default for StyleState {
+            fn default() -> Self {
+                Self {
+                    fg: Color::Named(NamedColor::Foreground),
+                    bg: Color::Named(NamedColor::Background),
+                    bold: false,
+                    dim: false,
+                    italic: false,
+                    underline: false,
+                    double_underline: false,
+                    inverse: false,
+                    strikeout: false,
+                }
+            }
+        }
+
+        let mut current_style = StyleState::default();
+        let mut out = String::new();
+
+        for c_idx in 0..=last_col {
+            let cell = &row[Column(c_idx)];
+
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+
+            let cell_style = StyleState {
+                fg: cell.fg,
+                bg: cell.bg,
+                bold: cell.flags.contains(Flags::BOLD),
+                dim: cell.flags.contains(Flags::DIM),
+                italic: cell.flags.contains(Flags::ITALIC),
+                underline: cell.flags.contains(Flags::UNDERLINE),
+                double_underline: cell.flags.contains(Flags::DOUBLE_UNDERLINE),
+                inverse: cell.flags.contains(Flags::INVERSE),
+                strikeout: cell.flags.contains(Flags::STRIKEOUT),
+            };
+
+            if cell_style != current_style {
+                let mut sgr = String::from("\x1b[0");
+
+                if cell_style.bold {
+                    sgr.push_str(";1");
+                }
+                if cell_style.dim {
+                    sgr.push_str(";2");
+                }
+                if cell_style.italic {
+                    sgr.push_str(";3");
+                }
+                if cell_style.underline {
+                    sgr.push_str(";4");
+                }
+                if cell_style.double_underline {
+                    sgr.push_str(";21");
+                }
+                if cell_style.inverse {
+                    sgr.push_str(";7");
+                }
+                if cell_style.strikeout {
+                    sgr.push_str(";9");
+                }
+
+                match cell_style.fg {
+                    Color::Named(named) => match named {
+                        NamedColor::Black => sgr.push_str(";30"),
+                        NamedColor::Red => sgr.push_str(";31"),
+                        NamedColor::Green => sgr.push_str(";32"),
+                        NamedColor::Yellow => sgr.push_str(";33"),
+                        NamedColor::Blue => sgr.push_str(";34"),
+                        NamedColor::Magenta => sgr.push_str(";35"),
+                        NamedColor::Cyan => sgr.push_str(";36"),
+                        NamedColor::White => sgr.push_str(";37"),
+                        NamedColor::BrightBlack => sgr.push_str(";90"),
+                        NamedColor::BrightRed => sgr.push_str(";91"),
+                        NamedColor::BrightGreen => sgr.push_str(";92"),
+                        NamedColor::BrightYellow => sgr.push_str(";93"),
+                        NamedColor::BrightBlue => sgr.push_str(";94"),
+                        NamedColor::BrightMagenta => sgr.push_str(";95"),
+                        NamedColor::BrightCyan => sgr.push_str(";96"),
+                        NamedColor::BrightWhite => sgr.push_str(";97"),
+                        NamedColor::Foreground => {},
+                        NamedColor::BrightForeground => sgr.push_str(";97"),
+                        NamedColor::DimBlack => sgr.push_str(";2;30"),
+                        NamedColor::DimRed => sgr.push_str(";2;31"),
+                        NamedColor::DimGreen => sgr.push_str(";2;32"),
+                        NamedColor::DimYellow => sgr.push_str(";2;33"),
+                        NamedColor::DimBlue => sgr.push_str(";2;34"),
+                        NamedColor::DimMagenta => sgr.push_str(";2;35"),
+                        NamedColor::DimCyan => sgr.push_str(";2;36"),
+                        NamedColor::DimWhite => sgr.push_str(";2;37"),
+                        NamedColor::DimForeground => sgr.push_str(";2;39"),
+                        _ => {},
+                    },
+                    Color::Indexed(idx) => {
+                        let _ = write!(sgr, ";38;5;{}", idx);
+                    }
+                    Color::Spec(rgb) => {
+                        let _ = write!(sgr, ";38;2;{};{};{}", rgb.r, rgb.g, rgb.b);
+                    }
+                }
+
+                match cell_style.bg {
+                    Color::Named(named) => match named {
+                        NamedColor::Black => sgr.push_str(";40"),
+                        NamedColor::Red => sgr.push_str(";41"),
+                        NamedColor::Green => sgr.push_str(";42"),
+                        NamedColor::Yellow => sgr.push_str(";43"),
+                        NamedColor::Blue => sgr.push_str(";44"),
+                        NamedColor::Magenta => sgr.push_str(";45"),
+                        NamedColor::Cyan => sgr.push_str(";46"),
+                        NamedColor::White => sgr.push_str(";47"),
+                        NamedColor::BrightBlack => sgr.push_str(";100"),
+                        NamedColor::BrightRed => sgr.push_str(";101"),
+                        NamedColor::BrightGreen => sgr.push_str(";102"),
+                        NamedColor::BrightYellow => sgr.push_str(";103"),
+                        NamedColor::BrightBlue => sgr.push_str(";104"),
+                        NamedColor::BrightMagenta => sgr.push_str(";105"),
+                        NamedColor::BrightCyan => sgr.push_str(";106"),
+                        NamedColor::BrightWhite => sgr.push_str(";107"),
+                        NamedColor::Background => {},
+                        _ => {},
+                    },
+                    Color::Indexed(idx) => {
+                        let _ = write!(sgr, ";48;5;{}", idx);
+                    }
+                    Color::Spec(rgb) => {
+                        let _ = write!(sgr, ";48;2;{};{};{}", rgb.r, rgb.g, rgb.b);
+                    }
+                }
+
+                sgr.push('m');
+                out.push_str(&sgr);
+                current_style = cell_style;
+            }
+
+            let ch = if cell.c == '\0' { ' ' } else { cell.c };
+            out.push(ch);
+
+            if let Some(zerowidth) = cell.zerowidth() {
+                for &zc in zerowidth {
+                    out.push(zc);
+                }
+            }
+        }
+
+        if current_style != StyleState::default() {
+            out.push_str("\x1b[0m");
+        }
+
+        out
+    }
+
     pub fn cursor_position(&self) -> Option<(usize, usize)> {
         let display_offset = self.term.grid().display_offset();
         let pt = self.term.grid().cursor.point;
@@ -160,10 +326,59 @@ impl TermScreen {
         }
     }
 
-    pub fn get_render_cell(&self, col: usize, line: usize) -> (char, alacritty_terminal::vte::ansi::Color, alacritty_terminal::vte::ansi::Color) {
+    pub fn get_render_cell(&self, col: usize, line: usize) -> (char, Color, Color) {
         let grid = self.term.grid();
         let display_line = Line(line as i32 - grid.display_offset() as i32);
         let cell = &grid[display_line][Column(col)];
-        (cell.c, cell.fg, cell.bg)
+
+        let c = if cell.flags.contains(Flags::HIDDEN) {
+            ' '
+        } else {
+            cell.c
+        };
+
+        let (mut fg, bg) = if cell.flags.contains(Flags::INVERSE) {
+            (cell.bg, cell.fg)
+        } else {
+            (cell.fg, cell.bg)
+        };
+
+        if cell.flags.contains(Flags::BOLD) {
+            match fg {
+                Color::Named(NamedColor::Black) => fg = Color::Named(NamedColor::BrightBlack),
+                Color::Named(NamedColor::Red) => fg = Color::Named(NamedColor::BrightRed),
+                Color::Named(NamedColor::Green) => fg = Color::Named(NamedColor::BrightGreen),
+                Color::Named(NamedColor::Yellow) => fg = Color::Named(NamedColor::BrightYellow),
+                Color::Named(NamedColor::Blue) => fg = Color::Named(NamedColor::BrightBlue),
+                Color::Named(NamedColor::Magenta) => fg = Color::Named(NamedColor::BrightMagenta),
+                Color::Named(NamedColor::Cyan) => fg = Color::Named(NamedColor::BrightCyan),
+                Color::Named(NamedColor::White) => fg = Color::Named(NamedColor::BrightWhite),
+                _ => {}
+            }
+        }
+
+        if cell.flags.contains(Flags::DIM) {
+            match fg {
+                Color::Named(NamedColor::Foreground) => fg = Color::Named(NamedColor::DimForeground),
+                Color::Named(NamedColor::Black) => fg = Color::Named(NamedColor::DimBlack),
+                Color::Named(NamedColor::Red) => fg = Color::Named(NamedColor::DimRed),
+                Color::Named(NamedColor::Green) => fg = Color::Named(NamedColor::DimGreen),
+                Color::Named(NamedColor::Yellow) => fg = Color::Named(NamedColor::DimYellow),
+                Color::Named(NamedColor::Blue) => fg = Color::Named(NamedColor::DimBlue),
+                Color::Named(NamedColor::Magenta) => fg = Color::Named(NamedColor::DimMagenta),
+                Color::Named(NamedColor::Cyan) => fg = Color::Named(NamedColor::DimCyan),
+                Color::Named(NamedColor::White) => fg = Color::Named(NamedColor::DimWhite),
+                Color::Spec(rgb) => {
+                    fg = Color::Spec(Rgb {
+                        r: (rgb.r as u16 * 2 / 3) as u8,
+                        g: (rgb.g as u16 * 2 / 3) as u8,
+                        b: (rgb.b as u16 * 2 / 3) as u8,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        (c, fg, bg)
     }
 }

@@ -197,3 +197,46 @@ fn test_scrollback_export_and_restore_cycle() {
     assert!(restored_lines.iter().any(|l| l.contains("cargo check")));
     assert!(restored_lines.iter().any(|l| l.contains("Finished dev")));
 }
+
+#[test]
+fn test_scrollback_export_and_restore_colors_and_styles() {
+    use celerterm::term::TermScreen;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor, Rgb};
+
+    let mut screen1 = TermScreen::new(80, 24);
+    // Write styled line: Green "PASS", Bold Red "FAIL", Blue background "BLUE", 24-bit TrueColor "RGB"
+    screen1.process_bytes(b"\x1b[32mPASS\x1b[0m \x1b[1;31mFAIL\x1b[0m \x1b[44mBLUE\x1b[0m \x1b[38;2;120;180;240mRGB\x1b[0m\r\n");
+
+    let saved_lines = screen1.get_scrollback_lines(100);
+    assert_eq!(saved_lines.len(), 1);
+    // Ensure escape sequences were serialized in saved string
+    assert!(saved_lines[0].contains("PASS"));
+    assert!(saved_lines[0].contains("FAIL"));
+    assert!(saved_lines[0].contains("BLUE"));
+    assert!(saved_lines[0].contains("RGB"));
+
+    // Restore into a fresh screen
+    let mut screen2 = TermScreen::new(80, 24);
+    for line in &saved_lines {
+        screen2.process_bytes(line.as_bytes());
+        screen2.process_bytes(b"\r\n");
+    }
+
+    // Check cell colors on restored screen2
+    let (c0, fg0, _) = screen2.get_render_cell(0, 0); // 'P'
+    assert_eq!(c0, 'P');
+    assert_eq!(fg0, Color::Named(NamedColor::Green));
+
+    let (c5, fg5, _) = screen2.get_render_cell(5, 0); // 'F' (bold red brightens to BrightRed)
+    assert_eq!(c5, 'F');
+    assert_eq!(fg5, Color::Named(NamedColor::BrightRed));
+
+    let (c10, _, bg10) = screen2.get_render_cell(10, 0); // 'B'
+    assert_eq!(c10, 'B');
+    assert_eq!(bg10, Color::Named(NamedColor::Blue));
+
+    let (c15, fg15, _) = screen2.get_render_cell(15, 0); // 'R'
+    assert_eq!(c15, 'R');
+    assert_eq!(fg15, Color::Spec(Rgb { r: 120, g: 180, b: 240 }));
+}
+
