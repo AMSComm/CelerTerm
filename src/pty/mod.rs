@@ -1,1 +1,3 @@
-// PTY module
+pub mod session;
+
+pub use session::PtySession;
