@@ -126,3 +126,74 @@ fn test_workspace_tab_switching_by_index_and_direction() {
     manager.select_previous_tab().expect("Previous tab");
     assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab2_id);
 }
+
+#[test]
+fn test_format_tab_title_logic() {
+    use celerterm::pty::format_tab_title;
+
+    // 1. Non-shell foreground process overrides folder name
+    assert_eq!(
+        format_tab_title(Some("nvim"), Some(&PathBuf::from("/Users/test/my_project"))),
+        "nvim"
+    );
+    assert_eq!(
+        format_tab_title(Some("cargo"), Some(&PathBuf::from("/Users/test/my_project"))),
+        "cargo"
+    );
+    assert_eq!(
+        format_tab_title(Some("python3"), Some(&PathBuf::from("/Users/test/my_project"))),
+        "python3"
+    );
+
+    // 2. Shell foreground process falls back to folder name
+    assert_eq!(
+        format_tab_title(Some("zsh"), Some(&PathBuf::from("/Users/test/my_project"))),
+        "my_project"
+    );
+    assert_eq!(
+        format_tab_title(Some("bash"), Some(&PathBuf::from("/Users/test/my_project"))),
+        "my_project"
+    );
+    assert_eq!(
+        format_tab_title(None, Some(&PathBuf::from("/Users/test/my_project"))),
+        "my_project"
+    );
+
+    // 3. User home directory displays as ~
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        assert_eq!(
+            format_tab_title(None, Some(base_dirs.home_dir())),
+            "~"
+        );
+    }
+}
+
+#[test]
+fn test_scrollback_export_and_restore_cycle() {
+    use celerterm::term::TermScreen;
+
+    // Setup an initial screen and write simulated terminal output
+    let mut screen1 = TermScreen::new(80, 24);
+    screen1.process_bytes(b"celerterm v0.1.0\r\n");
+    screen1.process_bytes(b"huy@mac:~/dev/amktest/celerterm $ cargo check\r\n");
+    screen1.process_bytes(b"Finished dev [unoptimized + debuginfo] target(s) in 0.5s\r\n");
+
+    // Export scrollback lines
+    let saved_lines = screen1.get_scrollback_lines(100);
+    assert!(!saved_lines.is_empty());
+    assert!(saved_lines.iter().any(|l| l.contains("celerterm v0.1.0")));
+    assert!(saved_lines.iter().any(|l| l.contains("cargo check")));
+    assert!(saved_lines.iter().any(|l| l.contains("Finished dev")));
+
+    // Restore into a fresh screen
+    let mut screen2 = TermScreen::new(80, 24);
+    for line in &saved_lines {
+        screen2.process_bytes(line.as_bytes());
+        screen2.process_bytes(b"\r\n");
+    }
+
+    let restored_lines = screen2.get_scrollback_lines(100);
+    assert!(restored_lines.iter().any(|l| l.contains("celerterm v0.1.0")));
+    assert!(restored_lines.iter().any(|l| l.contains("cargo check")));
+    assert!(restored_lines.iter().any(|l| l.contains("Finished dev")));
+}

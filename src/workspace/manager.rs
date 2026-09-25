@@ -56,8 +56,11 @@ impl Default for WorkspaceManager {
 
 impl WorkspaceManager {
     pub fn new() -> Self {
-        let default_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        let default_tab = Tab::new("tab_1", "Shell", default_cwd);
+        let default_cwd = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+        let initial_title = crate::pty::format_tab_title(None, Some(&default_cwd));
+        let default_tab = Tab::new("tab_1", initial_title, default_cwd);
         let default_ws = Workspace {
             id: "ws_default".to_string(),
             name: "Default".to_string(),
@@ -83,7 +86,8 @@ impl WorkspaceManager {
     pub fn new_tab(&mut self, cwd: PathBuf) -> Result<String, String> {
         let tab_id = format!("tab_{}", self.next_id);
         self.next_id += 1;
-        let tab = Tab::new(&tab_id, format!("Tab {}", self.next_id - 1), cwd);
+        let initial_title = crate::pty::format_tab_title(None, Some(&cwd));
+        let tab = Tab::new(&tab_id, initial_title, cwd);
 
         let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
         ws.tabs.push(tab);
@@ -114,8 +118,11 @@ impl WorkspaceManager {
         let tab_id = format!("tab_{}", self.next_id + 1);
         self.next_id += 2;
 
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-        let tab = Tab::new(&tab_id, "Shell", cwd);
+        let cwd = directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+        let initial_title = crate::pty::format_tab_title(None, Some(&cwd));
+        let tab = Tab::new(&tab_id, initial_title, cwd);
         let ws = Workspace {
             id: ws_id.clone(),
             name: name.to_string(),

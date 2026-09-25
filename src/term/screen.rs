@@ -108,6 +108,47 @@ impl TermScreen {
             .collect()
     }
 
+    pub fn get_scrollback_lines(&self, max_lines: usize) -> Vec<String> {
+        let grid = self.term.grid();
+        let total_lines = grid.total_lines();
+        let visible_lines = grid.screen_lines();
+        let history_lines = total_lines.saturating_sub(visible_lines);
+
+        let mut lines = Vec::new();
+
+        let hist_to_take = history_lines.min(max_lines);
+        let start_h = history_lines - hist_to_take;
+
+        for h in start_h..history_lines {
+            let offset = (history_lines - h) as i32;
+            let line_idx = Line(-offset);
+            let mut s = String::new();
+            for col in 0..self.size.columns {
+                s.push(grid[line_idx][Column(col)].c);
+            }
+            lines.push(s.trim_end().to_string());
+        }
+
+        for v in 0..visible_lines {
+            let line_idx = Line(v as i32);
+            let mut s = String::new();
+            for col in 0..self.size.columns {
+                s.push(grid[line_idx][Column(col)].c);
+            }
+            lines.push(s.trim_end().to_string());
+        }
+
+        while let Some(last) = lines.last() {
+            if last.is_empty() {
+                lines.pop();
+            } else {
+                break;
+            }
+        }
+
+        lines
+    }
+
     pub fn cursor_position(&self) -> Option<(usize, usize)> {
         let display_offset = self.term.grid().display_offset();
         let pt = self.term.grid().cursor.point;

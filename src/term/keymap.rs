@@ -17,6 +17,7 @@ pub enum KeyAction {
     NextTab,
     NewTab,
     CloseTab,
+    Quit,
     NewWorkspace,
     PreviousWorkspace,
     NextWorkspace,
@@ -54,6 +55,7 @@ pub fn translate_key_event(
                 match ch.as_str() {
                     "t" | "T" => return Some(KeyAction::NewTab),
                     "w" | "W" => return Some(KeyAction::CloseTab),
+                    "q" | "Q" => return Some(KeyAction::Quit),
                     "c" | "C" => return Some(KeyAction::Copy),
                     "v" | "V" => return Some(KeyAction::Paste),
                     "k" | "K" => return Some(KeyAction::ClearScreen),

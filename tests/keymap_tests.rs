@@ -159,6 +159,9 @@ fn test_cmd_t_new_tab_and_cmd_w_close_tab() {
 
     let action_close_tab = translate_key(&Key::Character("w".into()), mods, true);
     assert_eq!(action_close_tab, Some(KeyAction::CloseTab));
+
+    let action_quit = translate_key(&Key::Character("q".into()), mods, true);
+    assert_eq!(action_quit, Some(KeyAction::Quit));
 }
 
 #[test]

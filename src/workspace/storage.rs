@@ -4,8 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn get_default_snapshot_path() -> Option<PathBuf> {
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        return Some(base_dirs.home_dir().join(".config").join("celerterm").join("workspace_snapshot.json"));
+    }
     ProjectDirs::from("com", "celerterm", "celerterm")
-        .map(|dirs| dirs.data_local_dir().join("workspace_snapshot.json"))
+        .map(|dirs| dirs.config_dir().join("workspace_snapshot.json"))
 }
 
 pub fn save_snapshot_to_string(manager: &WorkspaceManager) -> Result<String, serde_json::Error> {

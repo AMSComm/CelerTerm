@@ -8,6 +8,7 @@ pub struct PtySession {
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub reader: Box<dyn Read + Send>,
     pub writer: Box<dyn Write + Send>,
+    pub child_pid: Option<u32>,
 }
 
 impl PtySession {
@@ -26,11 +27,14 @@ impl PtySession {
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "CelerTerm");
         cmd.env("TERM_PROGRAM_VERSION", "0.1.0");
-        if let Some(dir) = cwd {
+        if let Some(dir) = cwd
+            && dir.exists()
+        {
             cmd.cwd(dir);
         }
 
-        let _child = pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
+        let child_pid = child.process_id();
         drop(pair.slave); // Required on Unix so EOF is triggered when child exits
 
         let reader = pair.master.try_clone_reader()?;
@@ -40,6 +44,7 @@ impl PtySession {
             master: Arc::new(Mutex::new(pair.master)),
             reader,
             writer,
+            child_pid,
         })
     }
 
@@ -58,5 +63,17 @@ impl PtySession {
         self.writer.write_all(buf)?;
         self.writer.flush()?;
         Ok(())
+    }
+
+    pub fn foreground_process_id(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            let master = self.master.lock();
+            master.process_group_leader().map(|pid| pid as u32)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
     }
 }

@@ -33,6 +33,21 @@ pub struct TabSession {
     pub screen: TermScreen,
     pub writer: Box<dyn Write + Send>,
     pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+    pub child_pid: Option<u32>,
+}
+
+impl TabSession {
+    pub fn foreground_process_id(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            let master = self.master.lock();
+            master.process_group_leader().map(|pid| pid as u32)
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
 }
 
 pub struct CelerApp {
@@ -60,7 +75,25 @@ impl Default for CelerApp {
 impl CelerApp {
     pub fn new() -> Self {
         let config = load_config();
-        let workspace_mgr = WorkspaceManager::new();
+        let mut workspace_mgr = WorkspaceManager::new();
+
+        if config.workspace.restore_on_startup
+            && let Some(path) = crate::workspace::get_default_snapshot_path()
+            && path.exists()
+        {
+            match crate::workspace::load_snapshot_from_file(&path) {
+                Ok(loaded) => {
+                    if !loaded.workspaces.is_empty() && loaded.workspaces.iter().any(|w| !w.tabs.is_empty()) {
+                        info!("Restored workspace snapshot from {}", path.display());
+                        workspace_mgr = loaded;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to load workspace snapshot: {e}");
+                }
+            }
+        }
+
         let cols = 100;
         let rows = 30;
         let renderer = TextRenderer::with_options(
@@ -128,8 +161,19 @@ impl CelerApp {
 
     pub fn spawn_tab_session(&mut self, tab_id: &str, cwd: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
         let mut pty = PtySession::spawn(self.cols as u16, self.rows as u16, cwd)?;
-        let screen = TermScreen::new(self.cols, self.rows);
+        let mut screen = TermScreen::new(self.cols, self.rows);
 
+        // Pre-populate screen with scrollback cache if restoring tab
+        if let Some(ws) = self.workspace_mgr.get_active_workspace()
+            && let Some(tab) = ws.tabs.iter().find(|t| t.id == tab_id)
+        {
+            for line in &tab.scrollback_cache {
+                screen.process_bytes(line.as_bytes());
+                screen.process_bytes(b"\r\n");
+            }
+        }
+
+        let child_pid = pty.child_pid;
         if let Some(proxy) = &self.proxy {
             let proxy_clone = proxy.clone();
             let thread_tab_id = tab_id.to_string();
@@ -164,6 +208,7 @@ impl CelerApp {
             screen,
             writer: pty.writer,
             master: pty.master,
+            child_pid,
         };
 
         self.tab_sessions.insert(tab_id.to_string(), session);
@@ -172,6 +217,91 @@ impl CelerApp {
 
     fn active_tab_id(&self) -> Option<String> {
         self.workspace_mgr.get_active_workspace().map(|ws| ws.active_tab_id.clone())
+    }
+
+    pub fn ensure_tab_session(&mut self, tab_id: &str) {
+        if !self.tab_sessions.contains_key(tab_id) {
+            let cwd = self.workspace_mgr.get_active_workspace()
+                .and_then(|ws| ws.tabs.iter().find(|t| t.id == tab_id))
+                .map(|t| t.cwd.clone());
+            let _ = self.spawn_tab_session(tab_id, cwd.as_deref());
+        }
+    }
+
+    pub fn get_active_tab_cwd(&self) -> PathBuf {
+        if let Some(active_id) = self.active_tab_id() {
+            if let Some(session) = self.tab_sessions.get(&active_id)
+                && let Some(child_pid) = session.child_pid
+                && let Some(cwd) = crate::pty::get_process_cwd(child_pid)
+            {
+                return cwd;
+            }
+            if let Some(ws) = self.workspace_mgr.get_active_workspace()
+                && let Some(tab) = ws.tabs.iter().find(|t| t.id == active_id)
+            {
+                return tab.cwd.clone();
+            }
+        }
+        directories::BaseDirs::new()
+            .map(|b| b.home_dir().to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
+    }
+
+    pub fn update_tab_titles(&mut self) {
+        if let Some(ws) = self.workspace_mgr.get_active_workspace_mut() {
+            for tab in &mut ws.tabs {
+                if let Some(session) = self.tab_sessions.get(&tab.id) {
+                    let fg_pid = session.foreground_process_id();
+                    let child_pid = session.child_pid;
+
+                    // Update live cwd of the shell process
+                    if let Some(cpid) = child_pid
+                        && let Some(cwd) = crate::pty::get_process_cwd(cpid)
+                    {
+                        tab.cwd = cwd;
+                    }
+
+                    // Determine title: foreground process name if running, or cwd folder name
+                    if let Some(fpid) = fg_pid
+                        && child_pid != Some(fpid) && fpid > 0
+                    {
+                        let proc_name = crate::pty::get_process_name(fpid);
+                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd));
+                        continue;
+                    }
+
+                    tab.title = crate::pty::format_tab_title(None, Some(&tab.cwd));
+                }
+            }
+        }
+    }
+
+    pub fn save_workspace_state(&mut self) {
+        let max_lines = self.config.workspace.max_scrollback_lines;
+        let save_scrollback = self.config.workspace.save_scrollback;
+
+        for ws in &mut self.workspace_mgr.workspaces {
+            for tab in &mut ws.tabs {
+                if let Some(session) = self.tab_sessions.get(&tab.id) {
+                    if let Some(child_pid) = session.child_pid
+                        && let Some(cwd) = crate::pty::get_process_cwd(child_pid)
+                    {
+                        tab.cwd = cwd;
+                    }
+                    if save_scrollback {
+                        tab.scrollback_cache = session.screen.get_scrollback_lines(max_lines);
+                    }
+                }
+            }
+        }
+
+        if let Some(path) = crate::workspace::get_default_snapshot_path() {
+            if let Err(e) = crate::workspace::save_snapshot_to_file(&self.workspace_mgr, &path) {
+                log::warn!("Failed to save workspace snapshot: {e}");
+            } else {
+                info!("Saved workspace snapshot to {}", path.display());
+            }
+        }
     }
 }
 
@@ -193,6 +323,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 self.tab_sessions.remove(&tab_id);
                 let _ = self.workspace_mgr.close_tab(&tab_id);
                 if self.tab_sessions.is_empty() {
+                    self.save_workspace_state();
                     event_loop.exit();
                 } else if let Some(ref window) = self.window {
                     window.request_redraw();
@@ -243,13 +374,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
                 };
 
-                // Spawn initial tab session
-                let initial_tab_id = self.workspace_mgr.get_active_workspace()
-                    .map(|ws| ws.active_tab_id.clone())
-                    .unwrap_or_else(|| "tab_1".to_string());
+                // Spawn sessions for all tabs in the active workspace
+                let tabs_to_spawn: Vec<(String, PathBuf)> = self.workspace_mgr.get_active_workspace()
+                    .map(|ws| ws.tabs.iter().map(|t| (t.id.clone(), t.cwd.clone())).collect())
+                    .unwrap_or_default();
 
-                if let Err(e) = self.spawn_tab_session(&initial_tab_id, None) {
-                    eprintln!("Failed to spawn initial tab PTY: {e}");
+                for (tab_id, cwd) in tabs_to_spawn {
+                    if let Err(e) = self.spawn_tab_session(&tab_id, Some(&cwd)) {
+                        eprintln!("Failed to spawn tab PTY {tab_id}: {e}");
+                    }
                 }
 
                 self.surface = Some(surface);
@@ -263,6 +396,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
+                self.save_workspace_state();
                 event_loop.exit();
             }
             WindowEvent::ModifiersChanged(new_mods) => {
@@ -385,6 +519,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     self.tab_sessions.remove(tab_id);
                                     let _ = self.workspace_mgr.close_tab(tab_id);
                                     if self.tab_sessions.is_empty() {
+                                        self.save_workspace_state();
                                         event_loop.exit();
                                     } else {
                                         window.request_redraw();
@@ -393,6 +528,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     && let Some(ws) = self.workspace_mgr.get_active_workspace_mut()
                                 {
                                     ws.active_tab_id = tab_id.clone();
+                                    self.ensure_tab_session(tab_id);
                                     window.request_redraw();
                                 }
                                 clicked_tab = true;
@@ -401,7 +537,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
 
                         if !clicked_tab && button == MouseButton::Left && header.add_button_rect.contains(mx, my) {
-                            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+                            let cwd = self.get_active_tab_cwd();
                             if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
                                 let _ = self.spawn_tab_session(&new_tab_id, Some(&cwd));
                                 window.request_redraw();
@@ -437,7 +573,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 if let Some(action) = translate_key_event(&logical_key, phys_code, mods, self.config.macos.option_as_alt) {
                     match action {
                         KeyAction::NewTab => {
-                            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+                            let cwd = self.get_active_tab_cwd();
                             if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
                                 let _ = self.spawn_tab_session(&new_tab_id, Some(&cwd));
                                 if let Some(ref win) = window {
@@ -450,11 +586,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 self.tab_sessions.remove(&active_id);
                                 let _ = self.workspace_mgr.close_tab(&active_id);
                                 if self.tab_sessions.is_empty() {
+                                    self.save_workspace_state();
                                     event_loop.exit();
                                 } else if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
                             }
+                        }
+                        KeyAction::Quit => {
+                            self.save_workspace_state();
+                            event_loop.exit();
                         }
                         KeyAction::NewWorkspace => {
                             let ws_count = self.workspace_mgr.workspaces.len() + 1;
@@ -462,7 +603,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if let Ok(_new_ws_id) = self.workspace_mgr.new_workspace(&ws_name)
                                 && let Some(active_id) = self.active_tab_id()
                             {
-                                let _ = self.spawn_tab_session(&active_id, None);
+                                let cwd = self.get_active_tab_cwd();
+                                let _ = self.spawn_tab_session(&active_id, Some(&cwd));
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -470,10 +612,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::PreviousWorkspace => {
                             if self.workspace_mgr.previous_workspace().is_ok() {
-                                if let Some(active_id) = self.active_tab_id()
-                                    && !self.tab_sessions.contains_key(&active_id)
-                                {
-                                    let _ = self.spawn_tab_session(&active_id, None);
+                                if let Some(active_id) = self.active_tab_id() {
+                                    self.ensure_tab_session(&active_id);
                                 }
                                 if let Some(ref win) = window {
                                     win.request_redraw();
@@ -482,10 +622,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::NextWorkspace => {
                             if self.workspace_mgr.next_workspace().is_ok() {
-                                if let Some(active_id) = self.active_tab_id()
-                                    && !self.tab_sessions.contains_key(&active_id)
-                                {
-                                    let _ = self.spawn_tab_session(&active_id, None);
+                                if let Some(active_id) = self.active_tab_id() {
+                                    self.ensure_tab_session(&active_id);
                                 }
                                 if let Some(ref win) = window {
                                     win.request_redraw();
@@ -493,24 +631,27 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                         KeyAction::SelectTab(idx) => {
-                            if self.workspace_mgr.select_tab_by_1_index(idx).is_ok()
-                                && let Some(ref win) = window
-                            {
-                                win.request_redraw();
+                            if let Ok(tab_id) = self.workspace_mgr.select_tab_by_1_index(idx) {
+                                self.ensure_tab_session(&tab_id);
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
                             }
                         }
                         KeyAction::PreviousTab => {
-                            if self.workspace_mgr.select_previous_tab().is_ok()
-                                && let Some(ref win) = window
-                            {
-                                win.request_redraw();
+                            if let Ok(tab_id) = self.workspace_mgr.select_previous_tab() {
+                                self.ensure_tab_session(&tab_id);
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
                             }
                         }
                         KeyAction::NextTab => {
-                            if self.workspace_mgr.select_next_tab().is_ok()
-                                && let Some(ref win) = window
-                            {
-                                win.request_redraw();
+                            if let Ok(tab_id) = self.workspace_mgr.select_next_tab() {
+                                self.ensure_tab_session(&tab_id);
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
                             }
                         }
                         KeyAction::Paste => {
@@ -613,6 +754,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // Update dynamic tab titles & cwds
+                self.update_tab_titles();
+
                 if let (Some(window), Some(surface)) = (&self.window, &mut self.surface) {
                     let win_size = window.inner_size();
                     let width = win_size.width as usize;
@@ -704,14 +848,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
                             let tab_text_x = rect.x + (8.0 * self.scale_factor);
-                            let tab_title = format!("{}. {}", idx + 1, tabs.get(idx).map(|t| t.1.as_str()).unwrap_or("Tab"));
+                            let tab_title = tabs.get(idx).map(|t| t.1.as_str()).unwrap_or("Tab");
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
                                 tab_text_x,
                                 tab_text_y,
-                                &tab_title,
+                                tab_title,
                                 tab_fg,
                             );
 
