@@ -12,9 +12,30 @@ pub struct Modifiers {
 pub enum KeyAction {
     Bytes(Vec<u8>),
     Text(String),
+    SelectTab(usize),
+    PreviousTab,
+    NextTab,
 }
 
 pub fn translate_key(key: &Key, mods: Modifiers, option_as_alt: bool) -> Option<KeyAction> {
+    // 0. Command (Logo) shortcuts for Tab management
+    if mods.logo && !mods.ctrl && !mods.alt {
+        if let Key::Character(ch) = key
+            && let Ok(num) = ch.parse::<usize>()
+            && (1..=9).contains(&num)
+        {
+            return Some(KeyAction::SelectTab(num));
+        }
+
+        if let Key::Named(named) = key {
+            match named {
+                NamedKey::ArrowLeft => return Some(KeyAction::PreviousTab),
+                NamedKey::ArrowRight => return Some(KeyAction::NextTab),
+                _ => {}
+            }
+        }
+    }
+
     // 1. Control + Key combinations
     if mods.ctrl && !mods.alt && !mods.logo
         && let Key::Character(ch) = key

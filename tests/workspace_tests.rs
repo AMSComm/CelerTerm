@@ -87,3 +87,42 @@ fn test_disk_snapshot_persistence() {
     assert_eq!(restored.workspaces.len(), 1);
     assert_eq!(restored.workspaces[0].tabs.len(), 2);
 }
+
+#[test]
+fn test_workspace_tab_switching_by_index_and_direction() {
+    let mut manager = WorkspaceManager::new();
+    let tab1_id = manager.get_active_workspace().unwrap().active_tab_id.clone();
+    let tab2_id = manager.new_tab(PathBuf::from("/tmp/tab2")).unwrap();
+    let tab3_id = manager.new_tab(PathBuf::from("/tmp/tab3")).unwrap();
+
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs.len(), 3);
+    assert_eq!(ws.active_tab_id, tab3_id);
+
+    // Switch to tab 1 (1-indexed: index 1 -> tab1_id)
+    manager.select_tab_by_1_index(1).expect("Select tab 1");
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab1_id);
+
+    // Switch to tab 2
+    manager.select_tab_by_1_index(2).expect("Select tab 2");
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab2_id);
+
+    // Switch to tab 3
+    manager.select_tab_by_1_index(3).expect("Select tab 3");
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab3_id);
+
+    // Out of bounds (e.g. 5) returns error or no-op
+    assert!(manager.select_tab_by_1_index(5).is_err());
+
+    // Next tab wraps around from 3 to 1
+    manager.select_next_tab().expect("Next tab");
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab1_id);
+
+    // Previous tab wraps around from 1 to 3
+    manager.select_previous_tab().expect("Previous tab");
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab3_id);
+
+    // Previous tab from 3 to 2
+    manager.select_previous_tab().expect("Previous tab");
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab2_id);
+}

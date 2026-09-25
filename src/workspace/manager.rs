@@ -136,4 +136,47 @@ impl WorkspaceManager {
             Err("Workspace not found".to_string())
         }
     }
+
+    pub fn select_tab_by_1_index(&mut self, index_1_based: usize) -> Result<String, String> {
+        if index_1_based == 0 {
+            return Err("Tab index must be >= 1".to_string());
+        }
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        let zero_based = index_1_based - 1;
+        if zero_based < ws.tabs.len() {
+            let id = ws.tabs[zero_based].id.clone();
+            ws.active_tab_id = id.clone();
+            Ok(id)
+        } else {
+            Err(format!("Tab index {} out of bounds (total tabs: {})", index_1_based, ws.tabs.len()))
+        }
+    }
+
+    pub fn select_next_tab(&mut self) -> Result<String, String> {
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        if ws.tabs.is_empty() {
+            return Err("No tabs in workspace".to_string());
+        }
+        let current_pos = ws.tabs.iter().position(|t| t.id == ws.active_tab_id).unwrap_or(0);
+        let next_pos = (current_pos + 1) % ws.tabs.len();
+        let id = ws.tabs[next_pos].id.clone();
+        ws.active_tab_id = id.clone();
+        Ok(id)
+    }
+
+    pub fn select_previous_tab(&mut self) -> Result<String, String> {
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        if ws.tabs.is_empty() {
+            return Err("No tabs in workspace".to_string());
+        }
+        let current_pos = ws.tabs.iter().position(|t| t.id == ws.active_tab_id).unwrap_or(0);
+        let prev_pos = if current_pos == 0 {
+            ws.tabs.len() - 1
+        } else {
+            current_pos - 1
+        };
+        let id = ws.tabs[prev_pos].id.clone();
+        ws.active_tab_id = id.clone();
+        Ok(id)
+    }
 }

@@ -102,3 +102,38 @@ fn test_alt_backspace_word_delete() {
         Some(KeyAction::Bytes(vec![0x1b, 0x7f]))
     );
 }
+
+#[test]
+fn test_cmd_number_tab_selection() {
+    let mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        logo: true, // Command on macOS
+    };
+
+    // Cmd+1 to Cmd+9
+    for i in 1..=9 {
+        let key_str = i.to_string();
+        let action = translate_key(&Key::Character(key_str.into()), mods, true);
+        assert_eq!(action, Some(KeyAction::SelectTab(i)));
+    }
+}
+
+#[test]
+fn test_cmd_arrow_tab_navigation() {
+    let mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        logo: true, // Command on macOS
+    };
+
+    // Cmd+Left -> Previous Tab
+    let action_prev = translate_key(&Key::Named(NamedKey::ArrowLeft), mods, true);
+    assert_eq!(action_prev, Some(KeyAction::PreviousTab));
+
+    // Cmd+Right -> Next Tab
+    let action_next = translate_key(&Key::Named(NamedKey::ArrowRight), mods, true);
+    assert_eq!(action_next, Some(KeyAction::NextTab));
+}
