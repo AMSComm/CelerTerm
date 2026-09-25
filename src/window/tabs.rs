@@ -24,6 +24,7 @@ pub fn calculate_header_layout(
     tabs: &[(String, String)], // (id, title)
     hide_traffic_lights: bool,
     tabs_in_titlebar: bool,
+    scale_factor: f32,
 ) -> TabHeaderLayout {
     if !tabs_in_titlebar {
         return TabHeaderLayout {
@@ -33,34 +34,39 @@ pub fn calculate_header_layout(
         };
     }
 
-    let height = 34.0;
-    // On macOS, traffic lights take ~78px from the left when visible.
+    let scale = scale_factor.max(1.0);
+    let height = (38.0 * scale).round();
+    // On macOS, traffic lights take ~78-82pt from the left when visible.
     let start_x = if cfg!(target_os = "macos") && !hide_traffic_lights {
-        80.0
+        (82.0 * scale).round()
     } else {
-        8.0
+        (8.0 * scale).round()
     };
 
-    let mut tab_rects = Vec::new();
-    let tab_width = 160.0f32.min((window_width - start_x - 40.0) / (tabs.len().max(1) as f32));
+    let tab_padding = (4.0 * scale).round();
+    let btn_width = (28.0 * scale).round();
+    let max_tab_width = (180.0 * scale).round();
+    let available_w = (window_width - start_x - btn_width - tab_padding * 2.0).max(10.0);
+    let tab_width = max_tab_width.min(available_w / (tabs.len().max(1) as f32));
     let mut current_x = start_x;
+    let mut tab_rects = Vec::new();
 
     for (id, _) in tabs {
         let rect = Rect {
             x: current_x,
-            y: 4.0,
-            width: tab_width - 4.0,
-            height: height - 8.0,
+            y: tab_padding,
+            width: (tab_width - tab_padding).max(10.0),
+            height: height - tab_padding * 2.0,
         };
         tab_rects.push((id.clone(), rect));
         current_x += tab_width;
     }
 
     let add_button_rect = Rect {
-        x: current_x + 4.0,
-        y: 4.0,
-        width: 24.0,
-        height: height - 8.0,
+        x: current_x + tab_padding,
+        y: tab_padding,
+        width: btn_width,
+        height: height - tab_padding * 2.0,
     };
 
     TabHeaderLayout {

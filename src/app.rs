@@ -46,6 +46,7 @@ pub struct CelerApp {
     proxy: Option<EventLoopProxy<UserEvent>>,
     mouse_pos: (f64, f64),
     ime_preedit: Option<(String, Option<(usize, usize)>)>,
+    scale_factor: f32,
     cols: usize,
     rows: usize,
 }
@@ -80,15 +81,29 @@ impl CelerApp {
             proxy: None,
             mouse_pos: (0.0, 0.0),
             ime_preedit: None,
+            scale_factor: 1.0,
             cols,
             rows,
         }
     }
 
+    pub fn update_renderer(&mut self) {
+        let effective_size = (self.config.font.size * self.scale_factor).max(8.0);
+        self.renderer = TextRenderer::with_fallbacks(
+            &self.config.font.family,
+            &self.config.font.fallback_families,
+            effective_size,
+            self.config.font.line_height,
+        );
+    }
+
     pub fn recalculate_grid(&mut self, width: f32, height: f32) {
-        let header_h = if self.config.window.tabs_in_titlebar { 34.0 } else { 0.0 };
-        let term_h = (height - header_h - 8.0).max(10.0);
-        let term_w = (width - 16.0).max(10.0);
+        let scale = self.scale_factor;
+        let header_h = if self.config.window.tabs_in_titlebar { (38.0 * scale).round() } else { 0.0 };
+        let pad_x = (self.config.window.padding_x * scale).round();
+        let pad_y = (self.config.window.padding_y * scale).round();
+        let term_h = (height - header_h - pad_y * 2.0).max(10.0);
+        let term_w = (width - pad_x * 2.0).max(10.0);
 
         let cols = (term_w / self.renderer.cell_width).floor() as usize;
         let rows = (term_h / self.renderer.cell_height).floor() as usize;
@@ -198,6 +213,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
         match event_loop.create_window(attrs) {
             Ok(window) => {
                 let window = Arc::new(window);
+                let scale = window.scale_factor() as f32;
+                self.scale_factor = scale;
+                self.update_renderer();
+                let size = window.inner_size();
+                self.recalculate_grid(size.width as f32, size.height as f32);
+
                 #[cfg(target_os = "macos")]
                 apply_traffic_lights_visibility(&window, self.config.window.hide_traffic_lights);
 
@@ -311,6 +332,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         &tabs,
                         self.config.window.hide_traffic_lights,
                         self.config.window.tabs_in_titlebar,
+                        self.scale_factor,
                     );
 
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
@@ -321,7 +343,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         for (tab_id, rect) in &header.tab_rects {
                             if rect.contains(mx, my) {
                                 // Middle-click or clicking on 'x' at tab's right edge closes tab
-                                if button == MouseButton::Middle || mx >= rect.x + rect.width - 22.0 {
+                                let close_area_w = (24.0 * self.scale_factor).max(18.0);
+                                if button == MouseButton::Middle || mx >= rect.x + rect.width - close_area_w {
                                     self.tab_sessions.remove(tab_id);
                                     let _ = self.workspace_mgr.close_tab(tab_id);
                                     if self.tab_sessions.is_empty() {
@@ -486,7 +509,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::IncreaseFontSize => {
                             let new_size = (self.config.font.size + 1.0).min(32.0);
                             self.config.font.size = new_size;
-                            self.renderer = TextRenderer::with_fallbacks(&self.config.font.family, &self.config.font.fallback_families, new_size, self.config.font.line_height);
+                            self.update_renderer();
                             if let Some(ref win) = window {
                                 let size = win.inner_size();
                                 self.recalculate_grid(size.width as f32, size.height as f32);
@@ -496,7 +519,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::DecreaseFontSize => {
                             let new_size = (self.config.font.size - 1.0).max(9.0);
                             self.config.font.size = new_size;
-                            self.renderer = TextRenderer::with_fallbacks(&self.config.font.family, &self.config.font.fallback_families, new_size, self.config.font.line_height);
+                            self.update_renderer();
                             if let Some(ref win) = window {
                                 let size = win.inner_size();
                                 self.recalculate_grid(size.width as f32, size.height as f32);
@@ -506,7 +529,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::ResetFontSize => {
                             let default_size = 13.0;
                             self.config.font.size = default_size;
-                            self.renderer = TextRenderer::with_fallbacks(&self.config.font.family, &self.config.font.fallback_families, default_size, self.config.font.line_height);
+                            self.update_renderer();
                             if let Some(ref win) = window {
                                 let size = win.inner_size();
                                 self.recalculate_grid(size.width as f32, size.height as f32);
@@ -532,6 +555,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                     }
+                }
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.scale_factor = scale_factor as f32;
+                self.update_renderer();
+                let window = self.window.clone();
+                if let Some(ref win) = window {
+                    let size = win.inner_size();
+                    self.recalculate_grid(size.width as f32, size.height as f32);
+                    win.request_redraw();
                 }
             }
             WindowEvent::Resized(new_size) => {
@@ -583,6 +616,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         &tabs,
                         self.config.window.hide_traffic_lights,
                         self.config.window.tabs_in_titlebar,
+                        self.scale_factor,
                     );
 
                     if header.height > 0.0 {
@@ -600,14 +634,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                         // Draw Workspace Indicator badge on the right
                         let ws_label = format!("[WS: {}]", active_ws_name);
-                        let ws_x = (width as f32) - (ws_label.len() as f32 * self.renderer.cell_width) - 16.0;
-                        if ws_x > header.add_button_rect.x + 30.0 {
+                        let ws_x = (width as f32) - (ws_label.len() as f32 * self.renderer.cell_width) - (16.0 * self.scale_factor);
+                        let ws_y = ((header.height - self.renderer.cell_height) * 0.5).max(0.0);
+                        if ws_x > header.add_button_rect.x + (30.0 * self.scale_factor) {
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
                                 ws_x,
-                                6.0,
+                                ws_y,
                                 &ws_label,
                                 0x007AA2F7,
                             );
@@ -630,24 +665,26 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 tab_bg,
                             );
 
+                            let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            let tab_text_x = rect.x + (8.0 * self.scale_factor);
                             let tab_title = format!("{}. {}", idx + 1, tabs.get(idx).map(|t| t.1.as_str()).unwrap_or("Tab"));
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
-                                rect.x + 8.0,
-                                rect.y + 2.0,
+                                tab_text_x,
+                                tab_text_y,
                                 &tab_title,
                                 tab_fg,
                             );
 
-                            if rect.width > 40.0 {
+                            if rect.width > (40.0 * self.scale_factor) {
                                 self.renderer.draw_text(
                                     &mut buffer,
                                     width,
                                     height,
-                                    rect.x + rect.width - 16.0,
-                                    rect.y + 2.0,
+                                    rect.x + rect.width - (18.0 * self.scale_factor),
+                                    tab_text_y,
                                     "x",
                                     if is_active { 0x00787C99 } else { 0x00414868 },
                                 );
@@ -665,12 +702,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             header.add_button_rect.height as usize,
                             0x001F2335,
                         );
+                        let plus_x = header.add_button_rect.x + ((header.add_button_rect.width - self.renderer.cell_width) * 0.5).max(0.0);
+                        let plus_y = header.add_button_rect.y + ((header.add_button_rect.height - self.renderer.cell_height) * 0.5).max(0.0);
                         self.renderer.draw_text(
                             &mut buffer,
                             width,
                             height,
-                            header.add_button_rect.x + 7.0,
-                            header.add_button_rect.y + 2.0,
+                            plus_x,
+                            plus_y,
                             "+",
                             0x007AA2F7,
                         );
@@ -679,8 +718,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     // 3. Render Terminal Cells (Two-Pass: Pass 1 Backgrounds, Pass 2 Glyphs & Box Chars)
                     if let Some(active_session) = self.tab_sessions.get_mut(&active_tab_id) {
                         active_session.screen.dirty = false;
-                        let start_y = header.height + self.config.window.padding_y;
-                        let pad_x = self.config.window.padding_x;
+                        let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                        let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                        let start_y = header.height + pad_y;
                         let cell_w = self.renderer.cell_width;
                         let cell_h = self.renderer.cell_height;
                         let cols = active_session.screen.size.columns;
