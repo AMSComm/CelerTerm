@@ -22,6 +22,10 @@ impl PtySession {
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("TERM_PROGRAM", "CelerTerm");
+        cmd.env("TERM_PROGRAM_VERSION", "0.1.0");
         if let Some(dir) = cwd {
             cmd.cwd(dir);
         }

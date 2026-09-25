@@ -13,7 +13,9 @@ fn test_default_config() {
     assert!(config.macos.option_as_alt);
     
     // Font defaults
-    assert_eq!(config.font.size, 14.0);
+    assert_eq!(config.font.size, 13.0);
+    assert_eq!(config.font.family, "Firple");
+    assert!(!config.font.fallback_families.is_empty());
     assert!(config.font.ligatures);
     
     // Workspace defaults
@@ -66,5 +68,5 @@ fn test_partial_toml_with_defaults() {
     // Default fallback fields
     assert!(config.window.tabs_in_titlebar);
     assert!(config.macos.option_as_alt);
-    assert_eq!(config.font.size, 14.0);
+    assert_eq!(config.font.size, 13.0);
 }

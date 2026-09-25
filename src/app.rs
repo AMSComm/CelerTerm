@@ -45,6 +45,7 @@ pub struct CelerApp {
     modifiers: ModifiersState,
     proxy: Option<EventLoopProxy<UserEvent>>,
     mouse_pos: (f64, f64),
+    ime_preedit: Option<(String, Option<(usize, usize)>)>,
     cols: usize,
     rows: usize,
 }
@@ -61,7 +62,12 @@ impl CelerApp {
         let workspace_mgr = WorkspaceManager::new();
         let cols = 100;
         let rows = 30;
-        let renderer = TextRenderer::new(&config.font.family, config.font.size, config.font.line_height);
+        let renderer = TextRenderer::with_fallbacks(
+            &config.font.family,
+            &config.font.fallback_families,
+            config.font.size,
+            config.font.line_height,
+        );
 
         Self {
             window: None,
@@ -73,6 +79,7 @@ impl CelerApp {
             modifiers: ModifiersState::default(),
             proxy: None,
             mouse_pos: (0.0, 0.0),
+            ime_preedit: None,
             cols,
             rows,
         }
@@ -242,6 +249,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 self.mouse_pos = (position.x, position.y);
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
+                self.ime_preedit = None;
                 // Send committed IME text (Vietnamese / Japanese) to the active tab's PTY
                 if let Some(active_id) = self.active_tab_id()
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
@@ -249,8 +257,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let _ = session.writer.write_all(text.as_bytes());
                     let _ = session.writer.flush();
                 }
+                if let Some(ref window) = self.window {
+                    window.request_redraw();
+                }
             }
-            WindowEvent::Ime(Ime::Preedit(..)) => {
+            WindowEvent::Ime(Ime::Preedit(text, cursor_range)) => {
+                if text.is_empty() {
+                    self.ime_preedit = None;
+                } else {
+                    self.ime_preedit = Some((text, cursor_range));
+                }
                 if let Some(ref window) = self.window {
                     window.request_redraw();
                 }
@@ -470,7 +486,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::IncreaseFontSize => {
                             let new_size = (self.config.font.size + 1.0).min(32.0);
                             self.config.font.size = new_size;
-                            self.renderer = TextRenderer::new(&self.config.font.family, new_size, self.config.font.line_height);
+                            self.renderer = TextRenderer::with_fallbacks(&self.config.font.family, &self.config.font.fallback_families, new_size, self.config.font.line_height);
                             if let Some(ref win) = window {
                                 let size = win.inner_size();
                                 self.recalculate_grid(size.width as f32, size.height as f32);
@@ -480,7 +496,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::DecreaseFontSize => {
                             let new_size = (self.config.font.size - 1.0).max(9.0);
                             self.config.font.size = new_size;
-                            self.renderer = TextRenderer::new(&self.config.font.family, new_size, self.config.font.line_height);
+                            self.renderer = TextRenderer::with_fallbacks(&self.config.font.family, &self.config.font.fallback_families, new_size, self.config.font.line_height);
                             if let Some(ref win) = window {
                                 let size = win.inner_size();
                                 self.recalculate_grid(size.width as f32, size.height as f32);
@@ -488,9 +504,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                         KeyAction::ResetFontSize => {
-                            let default_size = 14.0;
+                            let default_size = 13.0;
                             self.config.font.size = default_size;
-                            self.renderer = TextRenderer::new(&self.config.font.family, default_size, self.config.font.line_height);
+                            self.renderer = TextRenderer::with_fallbacks(&self.config.font.family, &self.config.font.fallback_families, default_size, self.config.font.line_height);
                             if let Some(ref win) = window {
                                 let size = win.inner_size();
                                 self.recalculate_grid(size.width as f32, size.height as f32);
@@ -660,120 +676,233 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         );
                     }
 
-                    // 3. Render Terminal Cells with Full ANSI Colors and Exact Alignment
-                    if let Some(active_session) = self.tab_sessions.get(&active_tab_id) {
+                    // 3. Render Terminal Cells (Two-Pass: Pass 1 Backgrounds, Pass 2 Glyphs & Box Chars)
+                    if let Some(active_session) = self.tab_sessions.get_mut(&active_tab_id) {
+                        active_session.screen.dirty = false;
                         let start_y = header.height + self.config.window.padding_y;
                         let pad_x = self.config.window.padding_x;
                         let cell_w = self.renderer.cell_width;
                         let cell_h = self.renderer.cell_height;
                         let cols = active_session.screen.size.columns;
                         let lines = active_session.screen.size.lines;
+                        let default_fg = 0x00C0CAF5;
+                        let default_bg = 0x001A1B26;
 
+                        // Pass 1: Draw all cell backgrounds across lines
                         for line_idx in 0..lines {
                             let y = start_y + (line_idx as f32) * cell_h;
                             if y + cell_h > height as f32 {
                                 break;
                             }
-
-                            // Render cell by cell or grouped spans with exact grid alignment
-                            let mut col = 0;
-                            while col < cols {
-                                let (c, fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
-                                let fg_u32 = resolve_color(fg_col, 0x00C0CAF5, 0x001A1B26);
-                                let bg_u32 = resolve_color(bg_col, 0x00C0CAF5, 0x001A1B26);
-
-                                // If custom background color exists
-                                if bg_u32 != 0x001A1B26 {
+                            for col in 0..cols {
+                                let (_c, _fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
+                                let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
+                                if bg_u32 != default_bg {
                                     TextRenderer::draw_rect(
                                         &mut buffer,
                                         width,
                                         height,
                                         (pad_x + (col as f32) * cell_w) as usize,
                                         y as usize,
-                                        cell_w as usize,
-                                        cell_h as usize,
+                                        cell_w.ceil() as usize,
+                                        cell_h.ceil() as usize,
                                         bg_u32,
                                     );
-                                }
-
-                                // Gather consecutive chars with same fg/bg for ligature shaping
-                                let mut span = String::new();
-                                let start_col = col;
-
-                                if c != '\0' && c != ' ' {
-                                    span.push(c);
-                                    col += 1;
-                                    while col < cols {
-                                        let (nc, nfg, nbg) = active_session.screen.get_render_cell(col, line_idx);
-                                        if nc == '\0' || nc == ' ' {
-                                            break;
-                                        }
-                                        let nfg_u32 = resolve_color(nfg, 0x00C0CAF5, 0x001A1B26);
-                                        let nbg_u32 = resolve_color(nbg, 0x00C0CAF5, 0x001A1B26);
-                                        if nfg_u32 != fg_u32 || nbg_u32 != bg_u32 {
-                                            break;
-                                        }
-                                        span.push(nc);
-                                        col += 1;
-                                    }
-
-                                    self.renderer.draw_text(
-                                        &mut buffer,
-                                        width,
-                                        height,
-                                        pad_x + (start_col as f32) * cell_w,
-                                        y,
-                                        &span,
-                                        fg_u32,
-                                    );
-                                } else {
-                                    col += 1;
                                 }
                             }
                         }
 
-                        // 4. Render Block Cursor with Inverted Character Underneath
+                        // Pass 2: Draw glyphs, geometric box characters, icons, and ligatures
+                        for line_idx in 0..lines {
+                            let y = start_y + (line_idx as f32) * cell_h;
+                            if y + cell_h > height as f32 {
+                                break;
+                            }
+
+                            let mut col = 0;
+                            while col < cols {
+                                let (c, fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
+                                let fg_u32 = resolve_color(fg_col, default_fg, default_bg);
+
+                                if c == '\0' || c == ' ' {
+                                    col += 1;
+                                    continue;
+                                }
+
+                                let cell_x = pad_x + (col as f32) * cell_w;
+
+                                // A) Geometrically rendered Box-drawing & Block elements
+                                if TextRenderer::is_box_or_block(c) {
+                                    self.renderer.draw_box_or_block_char(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cell_x,
+                                        y,
+                                        c,
+                                        fg_u32,
+                                    );
+                                    col += 1;
+                                    continue;
+                                }
+
+                                // B) Nerd Font / PUA icons - individual cell placement
+                                if TextRenderer::is_nerd_font_or_pua(c) {
+                                    let mut icon_str = String::new();
+                                    icon_str.push(c);
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cell_x,
+                                        y,
+                                        &icon_str,
+                                        fg_u32,
+                                    );
+                                    col += 1;
+                                    continue;
+                                }
+
+                                // C) Text & ligatures: group consecutive non-box, non-PUA characters with identical fg/bg
+                                let start_col = col;
+                                let mut span = String::new();
+                                span.push(c);
+                                col += 1;
+
+                                while col < cols {
+                                    let (nc, nfg, nbg) = active_session.screen.get_render_cell(col, line_idx);
+                                    if nc == '\0' || nc == ' ' || TextRenderer::is_box_or_block(nc) || TextRenderer::is_nerd_font_or_pua(nc) {
+                                        break;
+                                    }
+                                    let nfg_u32 = resolve_color(nfg, default_fg, default_bg);
+                                    let nbg_u32 = resolve_color(nbg, default_fg, default_bg);
+                                    let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
+                                    if nfg_u32 != fg_u32 || nbg_u32 != bg_u32 {
+                                        break;
+                                    }
+                                    span.push(nc);
+                                    col += 1;
+                                }
+
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    pad_x + (start_col as f32) * cell_w,
+                                    y,
+                                    &span,
+                                    fg_u32,
+                                );
+                            }
+                        }
+
+                        // 4. Render Block Cursor & IME Preedit
                         if let Some((cursor_col, cursor_row)) = active_session.screen.cursor_position() {
                             let cursor_x = pad_x + (cursor_col as f32) * cell_w;
                             let cursor_y = start_y + (cursor_row as f32) * cell_h;
 
                             if cursor_y + cell_h <= height as f32 && cursor_x + cell_w <= width as f32 {
-                                let under_char = active_session.screen.get_cell_char(cursor_col, cursor_row);
+                                // Anchor native macOS IME candidate window right below cursor
+                                if let Some(ref window) = self.window {
+                                    window.set_ime_cursor_area(
+                                        winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(cursor_x as f64, (cursor_y + cell_h) as f64)),
+                                        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(cell_w as f64, cell_h as f64)),
+                                    );
+                                }
 
-                                // Draw cursor block
-                                TextRenderer::draw_rect(
-                                    &mut buffer,
-                                    width,
-                                    height,
-                                    cursor_x as usize,
-                                    cursor_y as usize,
-                                    cell_w as usize,
-                                    cell_h as usize,
-                                    0x007AA2F7, // Neon blue block cursor
-                                );
+                                if let Some((ref preedit_text, _)) = self.ime_preedit {
+                                    let preedit_len = preedit_text.chars().count();
+                                    let preedit_w = (preedit_len as f32 * cell_w).max(cell_w);
 
-                                // Invert character inside cursor box so it's readable
-                                if under_char != ' ' && under_char != '\0' {
-                                    let mut char_str = String::new();
-                                    char_str.push(under_char);
+                                    // IME composition background highlight
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cursor_x as usize,
+                                        cursor_y as usize,
+                                        preedit_w as usize,
+                                        cell_h as usize,
+                                        0x00283457,
+                                    );
+
+                                    // IME composition text
                                     self.renderer.draw_text(
                                         &mut buffer,
                                         width,
                                         height,
                                         cursor_x,
                                         cursor_y,
-                                        &char_str,
-                                        0x001A1B26, // Inverted to dark background
+                                        preedit_text,
+                                        0x00FFFFFF,
                                     );
+
+                                    // Neon blue underline for active preedit
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cursor_x as usize,
+                                        (cursor_y + cell_h - 2.0) as usize,
+                                        preedit_w as usize,
+                                        2,
+                                        0x007AA2F7,
+                                    );
+                                } else {
+                                    let under_char = active_session.screen.get_cell_char(cursor_col, cursor_row);
+
+                                    // Draw cursor block
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cursor_x as usize,
+                                        cursor_y as usize,
+                                        cell_w as usize,
+                                        cell_h as usize,
+                                        0x007AA2F7,
+                                    );
+
+                                    // Invert character inside cursor box so it's readable
+                                    if under_char != ' ' && under_char != '\0' {
+                                        let mut char_str = String::new();
+                                        char_str.push(under_char);
+                                        self.renderer.draw_text(
+                                            &mut buffer,
+                                            width,
+                                            height,
+                                            cursor_x,
+                                            cursor_y,
+                                            &char_str,
+                                            0x001A1B26,
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
 
                     let _ = buffer.present();
+
+                    #[cfg(target_os = "macos")]
+                    unsafe {
+                        use objc2::class;
+                        use objc2::msg_send;
+                        let _: () = msg_send![class!(CATransaction), flush];
+                    }
                 }
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(active_id) = self.active_tab_id()
+            && let Some(session) = self.tab_sessions.get(&active_id)
+            && session.screen.dirty
+            && let Some(ref window) = self.window
+        {
+            window.request_redraw();
         }
     }
 }

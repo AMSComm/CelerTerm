@@ -12,14 +12,43 @@ pub struct TextRenderer {
 
 impl TextRenderer {
     pub fn new(family: &str, size: f32, line_height_factor: f32) -> Self {
+        Self::with_fallbacks(family, &[], size, line_height_factor)
+    }
+
+    pub fn with_fallbacks(family: &str, fallbacks: &[String], size: f32, line_height_factor: f32) -> Self {
         let mut font_system = FontSystem::new();
+
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            let user_fonts = base_dirs.home_dir().join("Library").join("Fonts");
+            if user_fonts.exists() {
+                font_system.db_mut().load_fonts_dir(&user_fonts);
+            }
+            let linux_user_fonts = base_dirs.home_dir().join(".local").join("share").join("fonts");
+            if linux_user_fonts.exists() {
+                font_system.db_mut().load_fonts_dir(&linux_user_fonts);
+            }
+        }
+
+        let effective_family = if font_system.db().faces().any(|f| f.families.iter().any(|(fam, _)| fam == family)) {
+            family.to_string()
+        } else {
+            let mut found = None;
+            for fb in fallbacks {
+                if font_system.db().faces().any(|f| f.families.iter().any(|(fam, _)| fam == fb)) {
+                    found = Some(fb.clone());
+                    break;
+                }
+            }
+            found.unwrap_or_else(|| family.to_string())
+        };
+
         let swash_cache = SwashCache::new();
         let line_height = (size * line_height_factor).round();
 
         // Calculate monospace cell width by measuring a sample character 'M'
         let metrics = Metrics::new(size, line_height);
         let mut buffer = Buffer::new(&mut font_system, metrics);
-        let attrs = Attrs::new().family(Family::Name(family));
+        let attrs = Attrs::new().family(Family::Name(&effective_family));
         buffer.set_text(&mut font_system, "M", attrs, Shaping::Advanced);
         buffer.shape_until_scroll(&mut font_system, false);
 
@@ -35,7 +64,7 @@ impl TextRenderer {
         Self {
             font_system,
             swash_cache,
-            font_family: family.to_string(),
+            font_family: effective_family,
             font_size: size,
             line_height,
             cell_width,
@@ -201,6 +230,189 @@ impl TextRenderer {
             for px in x..max_x {
                 target[row_offset + px] = color;
             }
+        }
+    }
+
+    pub fn is_box_or_block(c: char) -> bool {
+        ('\u{2500}'..='\u{257f}').contains(&c) || ('\u{2580}'..='\u{259f}').contains(&c)
+    }
+
+    pub fn is_nerd_font_or_pua(c: char) -> bool {
+        ('\u{e000}'..='\u{f8ff}').contains(&c)
+            || ('\u{f0000}'..='\u{ffffd}').contains(&c)
+            || ('\u{100000}'..='\u{10fffd}').contains(&c)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_box_or_block_char(
+        &self,
+        target: &mut [u32],
+        target_width: usize,
+        target_height: usize,
+        cell_x: f32,
+        cell_y: f32,
+        c: char,
+        color: u32,
+    ) {
+        let x0 = cell_x.round() as usize;
+        let y0 = cell_y.round() as usize;
+        let x1 = (cell_x + self.cell_width).round() as usize;
+        let y1 = (cell_y + self.cell_height).round() as usize;
+        let w = x1.saturating_sub(x0);
+        let h = y1.saturating_sub(y0);
+        let mid_x = x0 + w / 2;
+        let mid_y = y0 + h / 2;
+
+        // Block elements
+        if ('\u{2580}'..='\u{259f}').contains(&c) {
+            match c {
+                '█' => Self::draw_rect(target, target_width, target_height, x0, y0, w, h, color),
+                '▀' => Self::draw_rect(target, target_width, target_height, x0, y0, w, h / 2, color),
+                '▄' => Self::draw_rect(target, target_width, target_height, x0, mid_y, w, y1.saturating_sub(mid_y), color),
+                '▌' => Self::draw_rect(target, target_width, target_height, x0, y0, w / 2, h, color),
+                '▐' => Self::draw_rect(target, target_width, target_height, mid_x, y0, x1.saturating_sub(mid_x), h, color),
+                ' '..='▇' => {
+                    let frac = (c as u32 - 0x2580) as usize;
+                    let bar_h = (h * frac) / 8;
+                    Self::draw_rect(target, target_width, target_height, x0, y1.saturating_sub(bar_h), w, bar_h, color);
+                }
+                '▔' => {
+                    let bar_h = (h / 8).max(1);
+                    Self::draw_rect(target, target_width, target_height, x0, y0, w, bar_h, color);
+                }
+                '▕' => {
+                    let bar_w = (w / 8).max(1);
+                    Self::draw_rect(target, target_width, target_height, x1.saturating_sub(bar_w), y0, bar_w, h, color);
+                }
+                '▖' => Self::draw_rect(target, target_width, target_height, x0, mid_y, w / 2, y1.saturating_sub(mid_y), color),
+                '▗' => Self::draw_rect(target, target_width, target_height, mid_x, mid_y, x1.saturating_sub(mid_x), y1.saturating_sub(mid_y), color),
+                '▘' => Self::draw_rect(target, target_width, target_height, x0, y0, w / 2, mid_y.saturating_sub(y0), color),
+                '▝' => Self::draw_rect(target, target_width, target_height, mid_x, y0, x1.saturating_sub(mid_x), mid_y.saturating_sub(y0), color),
+                '▚' => {
+                    Self::draw_rect(target, target_width, target_height, x0, y0, w / 2, mid_y.saturating_sub(y0), color);
+                    Self::draw_rect(target, target_width, target_height, mid_x, mid_y, x1.saturating_sub(mid_x), y1.saturating_sub(mid_y), color);
+                }
+                '▞' => {
+                    Self::draw_rect(target, target_width, target_height, mid_x, y0, x1.saturating_sub(mid_x), mid_y.saturating_sub(y0), color);
+                    Self::draw_rect(target, target_width, target_height, x0, mid_y, w / 2, y1.saturating_sub(mid_y), color);
+                }
+                '░' | '▒' | '▓' => {
+                    let step = if c == '▒' { 2 } else if c == '░' { 3 } else { 2 };
+                    for py in y0..y1.min(target_height) {
+                        for px in x0..x1.min(target_width) {
+                            let hit = match c {
+                                '▒' => (px + py) % 2 == 0,
+                                '░' => px % step == 0 && py % step == 0,
+                                '▓' => (px + py) % 2 == 0 || (px % 2 == 0),
+                                _ => false,
+                            };
+                            if hit {
+                                target[py * target_width + px] = color;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    Self::draw_rect(target, target_width, target_height, x0, y0, w, h, color);
+                }
+            }
+            return;
+        }
+
+        // Box drawing lines: (up, down, left, right)
+        // 0: none, 1: light, 2: heavy, 3: double
+        let arms = match c {
+            '─' | '┄' | '┈' | '╌' => (0, 0, 1, 1),
+            '━' | '┅' | '┉' | '╍' => (0, 0, 2, 2),
+            '═' => (0, 0, 3, 3),
+            '│' | '┆' | '┊' | '╎' => (1, 1, 0, 0),
+            '┃' | '┇' | '︙' | '╏' => (2, 2, 0, 0),
+            '║' => (3, 3, 0, 0),
+            '┌' | '╭' => (0, 1, 0, 1),
+            '┏' => (0, 2, 0, 2),
+            '╔' => (0, 3, 0, 3),
+            '┐' | '╮' => (0, 1, 1, 0),
+            '┓' => (0, 2, 2, 0),
+            '╗' => (0, 3, 3, 0),
+            '└' | '╰' => (1, 0, 0, 1),
+            '┗' => (2, 0, 0, 2),
+            '╚' => (3, 0, 0, 3),
+            '┘' | '╯' => (1, 0, 1, 0),
+            '┛' => (2, 0, 2, 0),
+            '╝' => (3, 0, 3, 0),
+            '├' => (1, 1, 0, 1),
+            '┣' => (2, 2, 0, 2),
+            '╠' => (3, 3, 0, 3),
+            '╡' | '╟' => (1, 1, 0, 3),
+            '┤' => (1, 1, 1, 0),
+            '┫' => (2, 2, 2, 0),
+            '╣' => (3, 3, 3, 0),
+            '┬' => (0, 1, 1, 1),
+            '┳' => (0, 2, 2, 2),
+            '╦' => (0, 3, 3, 3),
+            '┴' => (1, 0, 1, 1),
+            '┻' => (2, 0, 2, 2),
+            '╩' => (3, 0, 3, 3),
+            '┼' => (1, 1, 1, 1),
+            '╋' => (2, 2, 2, 2),
+            '╬' => (3, 3, 3, 3),
+            '╴' => (0, 0, 1, 0),
+            '╵' => (1, 0, 0, 0),
+            '╶' => (0, 0, 0, 1),
+            '╷' => (0, 1, 0, 0),
+            '╸' => (0, 0, 2, 0),
+            '╹' => (2, 0, 0, 0),
+            '╺' => (0, 0, 0, 2),
+            '╻' => (0, 2, 0, 0),
+            _ => (1, 1, 1, 1),
+        };
+
+        let (up, down, left, right) = arms;
+
+        // Draw UP arm
+        match up {
+            1 => Self::draw_rect(target, target_width, target_height, mid_x, y0, 1, (mid_y + 1).saturating_sub(y0), color),
+            2 => Self::draw_rect(target, target_width, target_height, mid_x.saturating_sub(1), y0, 2, (mid_y + 1).saturating_sub(y0), color),
+            3 => {
+                Self::draw_rect(target, target_width, target_height, mid_x.saturating_sub(2), y0, 1, (mid_y + 2).saturating_sub(y0), color);
+                Self::draw_rect(target, target_width, target_height, mid_x + 1, y0, 1, (mid_y + 2).saturating_sub(y0), color);
+            }
+            _ => {}
+        }
+
+        // Draw DOWN arm
+        match down {
+            1 => Self::draw_rect(target, target_width, target_height, mid_x, mid_y, 1, y1.saturating_sub(mid_y), color),
+            2 => Self::draw_rect(target, target_width, target_height, mid_x.saturating_sub(1), mid_y, 2, y1.saturating_sub(mid_y), color),
+            3 => {
+                let sy = mid_y.saturating_sub(1);
+                Self::draw_rect(target, target_width, target_height, mid_x.saturating_sub(2), sy, 1, y1.saturating_sub(sy), color);
+                Self::draw_rect(target, target_width, target_height, mid_x + 1, sy, 1, y1.saturating_sub(sy), color);
+            }
+            _ => {}
+        }
+
+        // Draw LEFT arm
+        match left {
+            1 => Self::draw_rect(target, target_width, target_height, x0, mid_y, (mid_x + 1).saturating_sub(x0), 1, color),
+            2 => Self::draw_rect(target, target_width, target_height, x0, mid_y.saturating_sub(1), (mid_x + 1).saturating_sub(x0), 2, color),
+            3 => {
+                Self::draw_rect(target, target_width, target_height, x0, mid_y.saturating_sub(2), (mid_x + 2).saturating_sub(x0), 1, color);
+                Self::draw_rect(target, target_width, target_height, x0, mid_y + 1, (mid_x + 2).saturating_sub(x0), 1, color);
+            }
+            _ => {}
+        }
+
+        // Draw RIGHT arm
+        match right {
+            1 => Self::draw_rect(target, target_width, target_height, mid_x, mid_y, x1.saturating_sub(mid_x), 1, color),
+            2 => Self::draw_rect(target, target_width, target_height, mid_x, mid_y.saturating_sub(1), x1.saturating_sub(mid_x), 2, color),
+            3 => {
+                let sx = mid_x.saturating_sub(1);
+                Self::draw_rect(target, target_width, target_height, sx, mid_y.saturating_sub(2), x1.saturating_sub(sx), 1, color);
+                Self::draw_rect(target, target_width, target_height, sx, mid_y + 1, x1.saturating_sub(sx), 1, color);
+            }
+            _ => {}
         }
     }
 }

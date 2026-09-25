@@ -52,6 +52,7 @@ impl Default for MacOsConfig {
 #[serde(default)]
 pub struct FontConfig {
     pub family: String,
+    pub fallback_families: Vec<String>,
     pub size: f32,
     pub ligatures: bool,
     pub line_height: f32,
@@ -60,8 +61,15 @@ pub struct FontConfig {
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
-            family: "JetBrainsMono Nerd Font".to_string(),
-            size: 14.0,
+            family: "Firple".to_string(),
+            fallback_families: vec![
+                "CaskaydiaCove Nerd Font Mono".to_string(),
+                "CaskaydiaMono NF".to_string(),
+                "JetBrainsMono NF".to_string(),
+                "JetBrains Mono".to_string(),
+                "Menlo".to_string(),
+            ],
+            size: 13.0,
             ligatures: true,
             line_height: 1.2,
         }

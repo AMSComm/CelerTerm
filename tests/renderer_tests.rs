@@ -2,7 +2,7 @@ use celerterm::renderer::TextRenderer;
 
 #[test]
 fn test_font_shaping_and_ligature_processing() {
-    let mut renderer = TextRenderer::new("JetBrainsMono Nerd Font", 14.0, 1.2);
+    let mut renderer = TextRenderer::new("Firple", 13.0, 1.2);
     
     // Normal ASCII text
     let glyphs_ascii = renderer.shape_line("hello world");
@@ -15,10 +15,76 @@ fn test_font_shaping_and_ligature_processing() {
 
 #[test]
 fn test_nerd_font_symbol_shaping() {
-    let mut renderer = TextRenderer::new("JetBrainsMono Nerd Font", 14.0, 1.2);
+    let mut renderer = TextRenderer::new("Firple", 13.0, 1.2);
 
     // Nerd Font icons: Folder (\u{f07b}), Git branch (\u{e725}), Rust gear (\u{e7a8})
     let nerd_text = " \u{f07b} project  \u{e725} main  \u{e7a8} cargo";
     let glyphs = renderer.shape_line(nerd_text);
     assert!(glyphs > 0);
+}
+
+#[test]
+fn test_box_and_block_char_detection() {
+    // Unicode box-drawing characters
+    assert!(TextRenderer::is_box_or_block('│'));
+    assert!(TextRenderer::is_box_or_block('─'));
+    assert!(TextRenderer::is_box_or_block('┌'));
+    assert!(TextRenderer::is_box_or_block('┐'));
+    assert!(TextRenderer::is_box_or_block('└'));
+    assert!(TextRenderer::is_box_or_block('┘'));
+    assert!(TextRenderer::is_box_or_block('╭'));
+    assert!(TextRenderer::is_box_or_block('╯'));
+    assert!(TextRenderer::is_box_or_block('┼'));
+
+    // Block elements
+    assert!(TextRenderer::is_box_or_block('█'));
+    assert!(TextRenderer::is_box_or_block('▀'));
+    assert!(TextRenderer::is_box_or_block('▄'));
+    assert!(TextRenderer::is_box_or_block('▌'));
+    assert!(TextRenderer::is_box_or_block('▐'));
+
+    // Standard characters should not be detected as box chars
+    assert!(!TextRenderer::is_box_or_block('A'));
+    assert!(!TextRenderer::is_box_or_block('0'));
+    assert!(!TextRenderer::is_box_or_block(' '));
+    assert!(!TextRenderer::is_box_or_block('='));
+}
+
+#[test]
+fn test_nerd_font_pua_detection() {
+    // BMP Private Use Area (Nerd Font icons)
+    assert!(TextRenderer::is_nerd_font_or_pua('\u{f07b}')); // folder
+    assert!(TextRenderer::is_nerd_font_or_pua('\u{e725}')); // git branch
+    assert!(TextRenderer::is_nerd_font_or_pua('\u{e7a8}')); // rust
+
+    // Normal characters
+    assert!(!TextRenderer::is_nerd_font_or_pua('x'));
+    assert!(!TextRenderer::is_nerd_font_or_pua('│'));
+}
+
+#[test]
+fn test_draw_box_and_block_char() {
+    let renderer = TextRenderer::new("Firple", 13.0, 1.2);
+    let mut buffer = vec![0u32; 100 * 100];
+
+    // Draw box drawing vertical line
+    renderer.draw_box_or_block_char(&mut buffer, 100, 100, 10.0, 10.0, '│', 0x00FF0000);
+    // Verify some pixels were written
+    assert!(buffer.contains(&0x00FF0000));
+
+    // Draw full block
+    renderer.draw_box_or_block_char(&mut buffer, 100, 100, 30.0, 30.0, '█', 0x0000FF00);
+    assert!(buffer.contains(&0x0000FF00));
+}
+
+#[test]
+fn test_with_fallbacks_font_loading() {
+    let fallbacks = vec![
+        "CaskaydiaCove Nerd Font Mono".to_string(),
+        "JetBrainsMono NF".to_string(),
+        "Menlo".to_string(),
+    ];
+    let renderer = TextRenderer::with_fallbacks("NonExistentFontXYZ", &fallbacks, 13.0, 1.2);
+    assert!(renderer.cell_width > 0.0);
+    assert!(renderer.cell_height > 0.0);
 }
