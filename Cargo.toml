@@ -1,0 +1,32 @@
+[package]
+name = "zenterm"
+version = "0.1.0"
+edition = "2024"
+authors = ["Huy <huy@zenterm.local>"]
+description = "A high-performance minimalist GPU-accelerated terminal emulator"
+
+[dependencies]
+alacritty_terminal = "0.24"
+portable-pty = "0.8"
+winit = { version = "0.30", features = ["rwh_06"] }
+wgpu = "24"
+cosmic-text = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+directories = "5.0"
+thiserror = "2.0"
+log = "0.4"
+env_logger = "0.11"
+parking_lot = "0.12"
+unicode-width = "0.2"
+rustix = { version = "0.38", features = ["std", "termios"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSWindow", "NSView", "NSApplication", "NSButton"] }
+objc2-foundation = "0.2"
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+tempfile = "3.17"
