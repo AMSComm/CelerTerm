@@ -70,4 +70,9 @@ impl TermScreen {
             .filter(|line| !line.is_empty())
             .collect()
     }
+
+    pub fn cursor_position(&self) -> (usize, usize) {
+        let pt = self.term.grid().cursor.point;
+        (pt.column.0, pt.line.0.max(0) as usize)
+    }
 }
