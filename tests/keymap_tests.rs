@@ -137,3 +137,106 @@ fn test_cmd_arrow_tab_navigation() {
     let action_next = translate_key(&Key::Named(NamedKey::ArrowRight), mods, true);
     assert_eq!(action_next, Some(KeyAction::NextTab));
 }
+
+#[test]
+fn test_space_key() {
+    let mods = Modifiers::default();
+    let action = translate_key(&Key::Named(NamedKey::Space), mods, true);
+    assert_eq!(action, Some(KeyAction::Bytes(vec![b' '])));
+}
+
+#[test]
+fn test_cmd_t_new_tab_and_cmd_w_close_tab() {
+    let mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        logo: true,
+    };
+
+    let action_new_tab = translate_key(&Key::Character("t".into()), mods, true);
+    assert_eq!(action_new_tab, Some(KeyAction::NewTab));
+
+    let action_close_tab = translate_key(&Key::Character("w".into()), mods, true);
+    assert_eq!(action_close_tab, Some(KeyAction::CloseTab));
+}
+
+#[test]
+fn test_cmd_shift_workspace_shortcuts() {
+    let mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        logo: true,
+    };
+
+    let action_new_ws = translate_key(&Key::Character("N".into()), mods, true);
+    assert_eq!(action_new_ws, Some(KeyAction::NewWorkspace));
+
+    let action_prev_ws = translate_key(&Key::Character("{".into()), mods, true);
+    assert_eq!(action_prev_ws, Some(KeyAction::PreviousWorkspace));
+
+    let action_next_ws = translate_key(&Key::Character("}".into()), mods, true);
+    assert_eq!(action_next_ws, Some(KeyAction::NextWorkspace));
+}
+
+#[test]
+fn test_option_q_neovim_physical_key() {
+    use celerterm::term::keymap::translate_key_event;
+    use winit::keyboard::KeyCode;
+
+    let mods = Modifiers {
+        alt: true,
+        ctrl: false,
+        shift: false,
+        logo: false,
+    };
+
+    // On macOS, Alt+Q produces logical character "œ", but physical key is KeyCode::KeyQ
+    let action = translate_key_event(
+        &Key::Character("œ".into()),
+        Some(KeyCode::KeyQ),
+        mods,
+        true,
+    );
+    assert_eq!(action, Some(KeyAction::Bytes(b"\x1bq".to_vec())));
+}
+
+#[test]
+fn test_cmd_clipboard_and_utility_shortcuts() {
+    let mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        logo: true,
+    };
+
+    assert_eq!(
+        translate_key(&Key::Character("c".into()), mods, true),
+        Some(KeyAction::Copy)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("v".into()), mods, true),
+        Some(KeyAction::Paste)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("k".into()), mods, true),
+        Some(KeyAction::ClearScreen)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("=".into()), mods, true),
+        Some(KeyAction::IncreaseFontSize)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("+".into()), mods, true),
+        Some(KeyAction::IncreaseFontSize)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("-".into()), mods, true),
+        Some(KeyAction::DecreaseFontSize)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("0".into()), mods, true),
+        Some(KeyAction::ResetFontSize)
+    );
+}

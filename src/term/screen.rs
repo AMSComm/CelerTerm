@@ -50,16 +50,40 @@ impl TermScreen {
         self.dirty = true;
     }
 
+    pub fn scroll_display(&mut self, delta: i32) {
+        self.term.scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
+        self.dirty = true;
+    }
+
+    pub fn scroll_to_bottom(&mut self) {
+        self.term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        self.dirty = true;
+    }
+
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    pub fn is_alt_screen(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+    }
+
+    pub fn is_bracketed_paste(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
+    }
+
     pub fn get_cell_char(&self, col: usize, line: usize) -> char {
         let grid = self.term.grid();
-        grid[Line(line as i32)][Column(col)].c
+        let display_line = Line(line as i32 - grid.display_offset() as i32);
+        grid[display_line][Column(col)].c
     }
 
     pub fn get_line_string(&self, line: usize) -> String {
         let grid = self.term.grid();
+        let display_line = Line(line as i32 - grid.display_offset() as i32);
         let mut s = String::new();
         for col in 0..self.size.columns {
-            s.push(grid[Line(line as i32)][Column(col)].c);
+            s.push(grid[display_line][Column(col)].c);
         }
         s.trim_end().to_string()
     }
@@ -71,8 +95,21 @@ impl TermScreen {
             .collect()
     }
 
-    pub fn cursor_position(&self) -> (usize, usize) {
+    pub fn cursor_position(&self) -> Option<(usize, usize)> {
+        let display_offset = self.term.grid().display_offset();
         let pt = self.term.grid().cursor.point;
-        (pt.column.0, pt.line.0.max(0) as usize)
+        let visible_line = pt.line.0 + (display_offset as i32);
+        if visible_line >= 0 && visible_line < self.size.lines as i32 {
+            Some((pt.column.0, visible_line as usize))
+        } else {
+            None
+        }
+    }
+
+    pub fn get_render_cell(&self, col: usize, line: usize) -> (char, alacritty_terminal::vte::ansi::Color, alacritty_terminal::vte::ansi::Color) {
+        let grid = self.term.grid();
+        let display_line = Line(line as i32 - grid.display_offset() as i32);
+        let cell = &grid[display_line][Column(col)];
+        (cell.c, cell.fg, cell.bg)
     }
 }

@@ -179,4 +179,30 @@ impl WorkspaceManager {
         ws.active_tab_id = id.clone();
         Ok(id)
     }
+
+    pub fn next_workspace(&mut self) -> Result<String, String> {
+        if self.workspaces.is_empty() {
+            return Err("No workspaces".to_string());
+        }
+        let current_pos = self.workspaces.iter().position(|w| w.id == self.active_workspace_id).unwrap_or(0);
+        let next_pos = (current_pos + 1) % self.workspaces.len();
+        let id = self.workspaces[next_pos].id.clone();
+        self.active_workspace_id = id.clone();
+        Ok(id)
+    }
+
+    pub fn previous_workspace(&mut self) -> Result<String, String> {
+        if self.workspaces.is_empty() {
+            return Err("No workspaces".to_string());
+        }
+        let current_pos = self.workspaces.iter().position(|w| w.id == self.active_workspace_id).unwrap_or(0);
+        let prev_pos = if current_pos == 0 {
+            self.workspaces.len() - 1
+        } else {
+            current_pos - 1
+        };
+        let id = self.workspaces[prev_pos].id.clone();
+        self.active_workspace_id = id.clone();
+        Ok(id)
+    }
 }

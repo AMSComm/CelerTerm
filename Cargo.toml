@@ -22,6 +22,7 @@ parking_lot = "0.12"
 unicode-width = "0.2"
 rustix = { version = "0.38", features = ["std", "termios"] }
 softbuffer = "0.4.8"
+arboard = "3.6.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"

@@ -1,23 +1,38 @@
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::num::NonZeroU32;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::io::Read;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::ModifiersState;
+use winit::keyboard::{ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 use crate::config::load_config;
 use crate::window::macos::{configure_macos_window, apply_traffic_lights_visibility};
 use crate::window::tabs::calculate_header_layout;
 use crate::workspace::WorkspaceManager;
 use crate::pty::PtySession;
-use crate::term::{TermScreen, translate_key, Modifiers, KeyAction};
-use crate::renderer::TextRenderer;
+use crate::term::{TermScreen, translate_key_event, Modifiers, KeyAction};
+use crate::renderer::{TextRenderer, resolve_color};
+use parking_lot::Mutex;
 use log::info;
 
 #[derive(Debug)]
 pub enum UserEvent {
-    PtyOutput(Vec<u8>),
+    PtyOutput {
+        tab_id: String,
+        bytes: Vec<u8>,
+    },
+    PtyExited {
+        tab_id: String,
+    },
+}
+
+pub struct TabSession {
+    pub screen: TermScreen,
+    pub writer: Box<dyn Write + Send>,
+    pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
 }
 
 pub struct CelerApp {
@@ -25,12 +40,13 @@ pub struct CelerApp {
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     config: crate::config::Config,
     workspace_mgr: WorkspaceManager,
-    pty: Option<PtySession>,
-    screen: TermScreen,
+    tab_sessions: HashMap<String, TabSession>,
     renderer: TextRenderer,
     modifiers: ModifiersState,
     proxy: Option<EventLoopProxy<UserEvent>>,
     mouse_pos: (f64, f64),
+    cols: usize,
+    rows: usize,
 }
 
 impl Default for CelerApp {
@@ -43,7 +59,8 @@ impl CelerApp {
     pub fn new() -> Self {
         let config = load_config();
         let workspace_mgr = WorkspaceManager::new();
-        let screen = TermScreen::new(100, 30);
+        let cols = 100;
+        let rows = 30;
         let renderer = TextRenderer::new(&config.font.family, config.font.size, config.font.line_height);
 
         Self {
@@ -51,22 +68,109 @@ impl CelerApp {
             surface: None,
             config,
             workspace_mgr,
-            pty: None,
-            screen,
+            tab_sessions: HashMap::new(),
             renderer,
             modifiers: ModifiersState::default(),
             proxy: None,
             mouse_pos: (0.0, 0.0),
+            cols,
+            rows,
         }
+    }
+
+    pub fn recalculate_grid(&mut self, width: f32, height: f32) {
+        let header_h = if self.config.window.tabs_in_titlebar { 34.0 } else { 0.0 };
+        let term_h = (height - header_h - 8.0).max(10.0);
+        let term_w = (width - 16.0).max(10.0);
+
+        let cols = (term_w / self.renderer.cell_width).floor() as usize;
+        let rows = (term_h / self.renderer.cell_height).floor() as usize;
+
+        if cols > 0 && rows > 0 {
+            self.cols = cols;
+            self.rows = rows;
+            for session in self.tab_sessions.values_mut() {
+                session.screen.resize(cols, rows);
+                let master = session.master.lock();
+                let _ = master.resize(portable_pty::PtySize {
+                    rows: rows as u16,
+                    cols: cols as u16,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                });
+            }
+        }
+    }
+
+    pub fn spawn_tab_session(&mut self, tab_id: &str, cwd: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+        let mut pty = PtySession::spawn(self.cols as u16, self.rows as u16, cwd)?;
+        let screen = TermScreen::new(self.cols, self.rows);
+
+        if let Some(proxy) = &self.proxy {
+            let proxy_clone = proxy.clone();
+            let thread_tab_id = tab_id.to_string();
+            let mut reader = std::mem::replace(
+                &mut pty.reader,
+                Box::new(std::io::empty()) as Box<dyn Read + Send>,
+            );
+
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if proxy_clone.send_event(UserEvent::PtyOutput {
+                                tab_id: thread_tab_id.clone(),
+                                bytes: buf[..n].to_vec(),
+                            }).is_err() {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = proxy_clone.send_event(UserEvent::PtyExited {
+                    tab_id: thread_tab_id,
+                });
+            });
+        }
+
+        let session = TabSession {
+            screen,
+            writer: pty.writer,
+            master: pty.master,
+        };
+
+        self.tab_sessions.insert(tab_id.to_string(), session);
+        Ok(())
+    }
+
+    fn active_tab_id(&self) -> Option<String> {
+        self.workspace_mgr.get_active_workspace().map(|ws| ws.active_tab_id.clone())
     }
 }
 
 impl ApplicationHandler<UserEvent> for CelerApp {
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::PtyOutput(bytes) => {
-                self.screen.process_bytes(&bytes);
-                if let Some(ref window) = self.window {
+            UserEvent::PtyOutput { tab_id, bytes } => {
+                if let Some(session) = self.tab_sessions.get_mut(&tab_id) {
+                    session.screen.process_bytes(&bytes);
+                    if let Some(active_id) = self.active_tab_id()
+                        && active_id == tab_id
+                        && let Some(ref window) = self.window
+                    {
+                        window.request_redraw();
+                    }
+                }
+            }
+            UserEvent::PtyExited { tab_id } => {
+                self.tab_sessions.remove(&tab_id);
+                let _ = self.workspace_mgr.close_tab(&tab_id);
+                if self.tab_sessions.is_empty() {
+                    event_loop.exit();
+                } else if let Some(ref window) = self.window {
                     window.request_redraw();
                 }
             }
@@ -80,7 +184,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
         let mut attrs = WindowAttributes::default()
             .with_title("CelerTerm")
-            .with_inner_size(winit::dpi::LogicalSize::new(960.0, 600.0));
+            .with_inner_size(winit::dpi::LogicalSize::new(980.0, 620.0));
 
         attrs = configure_macos_window(attrs, &self.config.window);
 
@@ -90,7 +194,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 #[cfg(target_os = "macos")]
                 apply_traffic_lights_visibility(&window, self.config.window.hide_traffic_lights);
 
-                // Setup softbuffer surface for zero-latency 60/120fps blitting
+                // Enable macOS IME composition (Telex, VNI, Japanese Hiragana)
+                window.set_ime_allowed(true);
+
                 let context = match softbuffer::Context::new(window.clone()) {
                     Ok(ctx) => ctx,
                     Err(e) => {
@@ -107,38 +213,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
                 };
 
-                // Spawn PTY session with user shell
-                let mut pty_res = PtySession::spawn(100, 30, None);
-                if let Ok(ref mut pty) = pty_res
-                    && let Some(proxy) = &self.proxy
-                {
-                    let proxy_clone = proxy.clone();
-                    // Split off reader into dedicated background thread
-                    // We use reader to stream shell output directly into screen buffer
-                    let mut reader = std::mem::replace(
-                        &mut pty.reader,
-                        Box::new(std::io::empty()) as Box<dyn Read + Send>,
-                    );
+                // Spawn initial tab session
+                let initial_tab_id = self.workspace_mgr.get_active_workspace()
+                    .map(|ws| ws.active_tab_id.clone())
+                    .unwrap_or_else(|| "tab_1".to_string());
 
-                    std::thread::spawn(move || {
-                        let mut buf = [0u8; 4096];
-                        loop {
-                            match reader.read(&mut buf) {
-                                Ok(0) => break, // Process EOF
-                                Ok(n) => {
-                                    if proxy_clone.send_event(UserEvent::PtyOutput(buf[..n].to_vec())).is_err() {
-                                        break;
-                                    }
-                                }
-                                Err(_) => break,
-                            }
-                        }
-                    });
-                }
-
-                match pty_res {
-                    Ok(pty) => self.pty = Some(pty),
-                    Err(e) => eprintln!("Failed to spawn PTY: {e}"),
+                if let Err(e) = self.spawn_tab_session(&initial_tab_id, None) {
+                    eprintln!("Failed to spawn initial tab PTY: {e}");
                 }
 
                 self.surface = Some(surface);
@@ -160,12 +241,50 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
             }
+            WindowEvent::Ime(Ime::Commit(text)) => {
+                // Send committed IME text (Vietnamese / Japanese) to the active tab's PTY
+                if let Some(active_id) = self.active_tab_id()
+                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                {
+                    let _ = session.writer.write_all(text.as_bytes());
+                    let _ = session.writer.flush();
+                }
+            }
+            WindowEvent::Ime(Ime::Preedit(..)) => {
+                if let Some(ref window) = self.window {
+                    window.request_redraw();
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let lines = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_x, y) => y.round() as i32,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0).round() as i32,
+                };
+                if lines != 0
+                    && let Some(active_id) = self.active_tab_id()
+                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                {
+                    if session.screen.is_alt_screen() {
+                        let arrow = if lines > 0 { b"\x1b[A" } else { b"\x1b[B" };
+                        for _ in 0..lines.abs() {
+                            let _ = session.writer.write_all(arrow);
+                        }
+                        let _ = session.writer.flush();
+                    } else {
+                        session.screen.scroll_display(lines);
+                        if let Some(ref win) = self.window {
+                            win.request_redraw();
+                        }
+                    }
+                }
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
-                button: MouseButton::Left,
+                button,
                 ..
             } => {
-                if let Some(ref window) = self.window {
+                let window = self.window.clone();
+                if let Some(ref window) = window {
                     let size = window.inner_size();
                     let tabs: Vec<(String, String)> = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.tabs.iter().map(|t| (t.id.clone(), t.title.clone())).collect())
@@ -180,12 +299,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
 
-                    // Check if clicked in header
+                    // Check click in header
                     if my <= header.height {
                         let mut clicked_tab = false;
                         for (tab_id, rect) in &header.tab_rects {
                             if rect.contains(mx, my) {
-                                if let Some(ws) = self.workspace_mgr.get_active_workspace_mut() {
+                                // Middle-click or clicking on 'x' at tab's right edge closes tab
+                                if button == MouseButton::Middle || mx >= rect.x + rect.width - 22.0 {
+                                    self.tab_sessions.remove(tab_id);
+                                    let _ = self.workspace_mgr.close_tab(tab_id);
+                                    if self.tab_sessions.is_empty() {
+                                        event_loop.exit();
+                                    } else {
+                                        window.request_redraw();
+                                    }
+                                } else if button == MouseButton::Left
+                                    && let Some(ws) = self.workspace_mgr.get_active_workspace_mut()
+                                {
                                     ws.active_tab_id = tab_id.clone();
                                     window.request_redraw();
                                 }
@@ -194,11 +324,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
 
-                        if !clicked_tab && header.add_button_rect.contains(mx, my) {
-                            let _ = self.workspace_mgr.new_tab(std::env::current_dir().unwrap_or_default());
-                            window.request_redraw();
-                        } else if !clicked_tab {
-                            // Drag window when clicking empty header space
+                        if !clicked_tab && button == MouseButton::Left && header.add_button_rect.contains(mx, my) {
+                            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+                            if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
+                                let _ = self.spawn_tab_session(&new_tab_id, Some(&cwd));
+                                window.request_redraw();
+                            }
+                        } else if !clicked_tab && button == MouseButton::Left {
                             let _ = window.drag_window();
                         }
                     }
@@ -207,11 +339,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
                     logical_key,
+                    physical_key,
                     state: ElementState::Pressed,
                     ..
                 },
                 ..
             } => {
+                let window = self.window.clone();
                 let mods = Modifiers {
                     alt: self.modifiers.alt_key(),
                     ctrl: self.modifiers.control_key(),
@@ -219,37 +353,166 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     logo: self.modifiers.super_key(),
                 };
 
-                if let Some(action) = translate_key(&logical_key, mods, self.config.macos.option_as_alt) {
+                let phys_code = match physical_key {
+                    PhysicalKey::Code(code) => Some(code),
+                    _ => None,
+                };
+
+                if let Some(action) = translate_key_event(&logical_key, phys_code, mods, self.config.macos.option_as_alt) {
                     match action {
+                        KeyAction::NewTab => {
+                            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+                            if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
+                                let _ = self.spawn_tab_session(&new_tab_id, Some(&cwd));
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::CloseTab => {
+                            if let Some(active_id) = self.active_tab_id() {
+                                self.tab_sessions.remove(&active_id);
+                                let _ = self.workspace_mgr.close_tab(&active_id);
+                                if self.tab_sessions.is_empty() {
+                                    event_loop.exit();
+                                } else if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::NewWorkspace => {
+                            let ws_count = self.workspace_mgr.workspaces.len() + 1;
+                            let ws_name = format!("Workspace {}", ws_count);
+                            if let Ok(_new_ws_id) = self.workspace_mgr.new_workspace(&ws_name)
+                                && let Some(active_id) = self.active_tab_id()
+                            {
+                                let _ = self.spawn_tab_session(&active_id, None);
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::PreviousWorkspace => {
+                            if self.workspace_mgr.previous_workspace().is_ok() {
+                                if let Some(active_id) = self.active_tab_id()
+                                    && !self.tab_sessions.contains_key(&active_id)
+                                {
+                                    let _ = self.spawn_tab_session(&active_id, None);
+                                }
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::NextWorkspace => {
+                            if self.workspace_mgr.next_workspace().is_ok() {
+                                if let Some(active_id) = self.active_tab_id()
+                                    && !self.tab_sessions.contains_key(&active_id)
+                                {
+                                    let _ = self.spawn_tab_session(&active_id, None);
+                                }
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
                         KeyAction::SelectTab(idx) => {
                             if self.workspace_mgr.select_tab_by_1_index(idx).is_ok()
-                                && let Some(ref window) = self.window
+                                && let Some(ref win) = window
                             {
-                                window.request_redraw();
+                                win.request_redraw();
                             }
                         }
                         KeyAction::PreviousTab => {
                             if self.workspace_mgr.select_previous_tab().is_ok()
-                                && let Some(ref window) = self.window
+                                && let Some(ref win) = window
                             {
-                                window.request_redraw();
+                                win.request_redraw();
                             }
                         }
                         KeyAction::NextTab => {
                             if self.workspace_mgr.select_next_tab().is_ok()
-                                && let Some(ref window) = self.window
+                                && let Some(ref win) = window
                             {
-                                window.request_redraw();
+                                win.request_redraw();
+                            }
+                        }
+                        KeyAction::Paste => {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new()
+                                && let Ok(text) = clipboard.get_text()
+                                && let Some(active_id) = self.active_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.scroll_to_bottom();
+                                if session.screen.is_bracketed_paste() {
+                                    let mut payload = Vec::with_capacity(text.len() + 12);
+                                    payload.extend_from_slice(b"\x1b[200~");
+                                    payload.extend_from_slice(text.as_bytes());
+                                    payload.extend_from_slice(b"\x1b[201~");
+                                    let _ = session.writer.write_all(&payload);
+                                } else {
+                                    let _ = session.writer.write_all(text.as_bytes());
+                                }
+                                let _ = session.writer.flush();
+                            }
+                        }
+                        KeyAction::Copy => {
+                            // Copy shortcut recognized; ready for text selection integration
+                        }
+                        KeyAction::ClearScreen => {
+                            if let Some(active_id) = self.active_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                let _ = session.writer.write_all(b"\x0c");
+                                let _ = session.writer.flush();
+                            }
+                        }
+                        KeyAction::IncreaseFontSize => {
+                            let new_size = (self.config.font.size + 1.0).min(32.0);
+                            self.config.font.size = new_size;
+                            self.renderer = TextRenderer::new(&self.config.font.family, new_size, self.config.font.line_height);
+                            if let Some(ref win) = window {
+                                let size = win.inner_size();
+                                self.recalculate_grid(size.width as f32, size.height as f32);
+                                win.request_redraw();
+                            }
+                        }
+                        KeyAction::DecreaseFontSize => {
+                            let new_size = (self.config.font.size - 1.0).max(9.0);
+                            self.config.font.size = new_size;
+                            self.renderer = TextRenderer::new(&self.config.font.family, new_size, self.config.font.line_height);
+                            if let Some(ref win) = window {
+                                let size = win.inner_size();
+                                self.recalculate_grid(size.width as f32, size.height as f32);
+                                win.request_redraw();
+                            }
+                        }
+                        KeyAction::ResetFontSize => {
+                            let default_size = 14.0;
+                            self.config.font.size = default_size;
+                            self.renderer = TextRenderer::new(&self.config.font.family, default_size, self.config.font.line_height);
+                            if let Some(ref win) = window {
+                                let size = win.inner_size();
+                                self.recalculate_grid(size.width as f32, size.height as f32);
+                                win.request_redraw();
                             }
                         }
                         KeyAction::Bytes(bytes) => {
-                            if let Some(ref mut pty) = self.pty {
-                                let _ = pty.write_all(&bytes);
+                            if let Some(active_id) = self.active_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.scroll_to_bottom();
+                                let _ = session.writer.write_all(&bytes);
+                                let _ = session.writer.flush();
                             }
                         }
                         KeyAction::Text(text) => {
-                            if let Some(ref mut pty) = self.pty {
-                                let _ = pty.write_all(text.as_bytes());
+                            if let Some(active_id) = self.active_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.scroll_to_bottom();
+                                let _ = session.writer.write_all(text.as_bytes());
+                                let _ = session.writer.flush();
                             }
                         }
                     }
@@ -260,20 +523,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     if let Some(ref mut surface) = self.surface {
                         let _ = surface.resize(w, h);
                     }
-
-                    let header_h = if self.config.window.tabs_in_titlebar { 34.0 } else { 0.0 };
-                    let term_h = (new_size.height as f32 - header_h - 8.0).max(10.0);
-                    let term_w = (new_size.width as f32 - 16.0).max(10.0);
-
-                    let cols = (term_w / self.renderer.cell_width).floor() as usize;
-                    let rows = (term_h / self.renderer.cell_height).floor() as usize;
-
-                    if cols > 0 && rows > 0 {
-                        self.screen.resize(cols, rows);
-                        if let Some(ref pty) = self.pty {
-                            let _ = pty.resize(cols as u16, rows as u16);
-                        }
-                    }
+                    self.recalculate_grid(new_size.width as f32, new_size.height as f32);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -295,7 +545,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         Err(_) => return,
                     };
 
-                    // 1. Fill terminal background (Tokyo Night deep navy #1a1b26)
+                    // 1. Fill terminal background (Tokyo Night navy #1a1b26)
                     let bg_color = 0x001A1B26;
                     buffer.fill(bg_color);
 
@@ -307,6 +557,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let active_tab_id = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.active_tab_id.clone())
                         .unwrap_or_default();
+
+                    let active_ws_name = self.workspace_mgr.get_active_workspace()
+                        .map(|ws| ws.name.clone())
+                        .unwrap_or_else(|| "Default".to_string());
 
                     let header = calculate_header_layout(
                         width as f32,
@@ -327,6 +581,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             header.height as usize,
                             0x0016161E,
                         );
+
+                        // Draw Workspace Indicator badge on the right
+                        let ws_label = format!("[WS: {}]", active_ws_name);
+                        let ws_x = (width as f32) - (ws_label.len() as f32 * self.renderer.cell_width) - 16.0;
+                        if ws_x > header.add_button_rect.x + 30.0 {
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                ws_x,
+                                6.0,
+                                &ws_label,
+                                0x007AA2F7,
+                            );
+                        }
 
                         // Draw tabs
                         for (idx, (tab_id, rect)) in header.tab_rects.iter().enumerate() {
@@ -355,6 +624,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 &tab_title,
                                 tab_fg,
                             );
+
+                            if rect.width > 40.0 {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    rect.x + rect.width - 16.0,
+                                    rect.y + 2.0,
+                                    "x",
+                                    if is_active { 0x00787C99 } else { 0x00414868 },
+                                );
+                            }
                         }
 
                         // Draw '+' button
@@ -379,47 +660,114 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         );
                     }
 
-                    // 3. Render Terminal Screen Grid
-                    let start_y = header.height + self.config.window.padding_y;
-                    let pad_x = self.config.window.padding_x;
-                    let cell_h = self.renderer.cell_height;
+                    // 3. Render Terminal Cells with Full ANSI Colors and Exact Alignment
+                    if let Some(active_session) = self.tab_sessions.get(&active_tab_id) {
+                        let start_y = header.height + self.config.window.padding_y;
+                        let pad_x = self.config.window.padding_x;
+                        let cell_w = self.renderer.cell_width;
+                        let cell_h = self.renderer.cell_height;
+                        let cols = active_session.screen.size.columns;
+                        let lines = active_session.screen.size.lines;
 
-                    for line_idx in 0..self.screen.size.lines {
-                        let y = start_y + (line_idx as f32) * cell_h;
-                        if y + cell_h > height as f32 {
-                            break;
+                        for line_idx in 0..lines {
+                            let y = start_y + (line_idx as f32) * cell_h;
+                            if y + cell_h > height as f32 {
+                                break;
+                            }
+
+                            // Render cell by cell or grouped spans with exact grid alignment
+                            let mut col = 0;
+                            while col < cols {
+                                let (c, fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
+                                let fg_u32 = resolve_color(fg_col, 0x00C0CAF5, 0x001A1B26);
+                                let bg_u32 = resolve_color(bg_col, 0x00C0CAF5, 0x001A1B26);
+
+                                // If custom background color exists
+                                if bg_u32 != 0x001A1B26 {
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        (pad_x + (col as f32) * cell_w) as usize,
+                                        y as usize,
+                                        cell_w as usize,
+                                        cell_h as usize,
+                                        bg_u32,
+                                    );
+                                }
+
+                                // Gather consecutive chars with same fg/bg for ligature shaping
+                                let mut span = String::new();
+                                let start_col = col;
+
+                                if c != '\0' && c != ' ' {
+                                    span.push(c);
+                                    col += 1;
+                                    while col < cols {
+                                        let (nc, nfg, nbg) = active_session.screen.get_render_cell(col, line_idx);
+                                        if nc == '\0' || nc == ' ' {
+                                            break;
+                                        }
+                                        let nfg_u32 = resolve_color(nfg, 0x00C0CAF5, 0x001A1B26);
+                                        let nbg_u32 = resolve_color(nbg, 0x00C0CAF5, 0x001A1B26);
+                                        if nfg_u32 != fg_u32 || nbg_u32 != bg_u32 {
+                                            break;
+                                        }
+                                        span.push(nc);
+                                        col += 1;
+                                    }
+
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        pad_x + (start_col as f32) * cell_w,
+                                        y,
+                                        &span,
+                                        fg_u32,
+                                    );
+                                } else {
+                                    col += 1;
+                                }
+                            }
                         }
 
-                        let line_str = self.screen.get_line_string(line_idx);
-                        if !line_str.is_empty() {
-                            self.renderer.draw_text(
-                                &mut buffer,
-                                width,
-                                height,
-                                pad_x,
-                                y,
-                                &line_str,
-                                0x00C0CAF5, // Bright terminal foreground
-                            );
+                        // 4. Render Block Cursor with Inverted Character Underneath
+                        if let Some((cursor_col, cursor_row)) = active_session.screen.cursor_position() {
+                            let cursor_x = pad_x + (cursor_col as f32) * cell_w;
+                            let cursor_y = start_y + (cursor_row as f32) * cell_h;
+
+                            if cursor_y + cell_h <= height as f32 && cursor_x + cell_w <= width as f32 {
+                                let under_char = active_session.screen.get_cell_char(cursor_col, cursor_row);
+
+                                // Draw cursor block
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    cursor_x as usize,
+                                    cursor_y as usize,
+                                    cell_w as usize,
+                                    cell_h as usize,
+                                    0x007AA2F7, // Neon blue block cursor
+                                );
+
+                                // Invert character inside cursor box so it's readable
+                                if under_char != ' ' && under_char != '\0' {
+                                    let mut char_str = String::new();
+                                    char_str.push(under_char);
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cursor_x,
+                                        cursor_y,
+                                        &char_str,
+                                        0x001A1B26, // Inverted to dark background
+                                    );
+                                }
+                            }
                         }
-                    }
-
-                    // 4. Render Cursor
-                    let (cursor_col, cursor_row) = self.screen.cursor_position();
-                    let cursor_x = pad_x + (cursor_col as f32) * self.renderer.cell_width;
-                    let cursor_y = start_y + (cursor_row as f32) * cell_h;
-
-                    if cursor_y + cell_h <= height as f32 && cursor_x + self.renderer.cell_width <= width as f32 {
-                        TextRenderer::draw_rect(
-                            &mut buffer,
-                            width,
-                            height,
-                            cursor_x as usize,
-                            cursor_y as usize,
-                            self.renderer.cell_width as usize,
-                            cell_h as usize,
-                            0x007AA2F7, // Neon blue block cursor
-                        );
                     }
 
                     let _ = buffer.present();

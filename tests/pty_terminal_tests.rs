@@ -68,3 +68,17 @@ fn test_pty_spawn_and_shell_communication() {
 
     assert!(found, "PTY output should contain 'celerterm_live_check'");
 }
+
+#[test]
+fn test_renderable_content_and_scroll() {
+    let mut screen = TermScreen::new(80, 24);
+    for i in 0..50 {
+        screen.process_bytes(format!("Line number {}\r\n", i).as_bytes());
+    }
+
+    screen.scroll_display(5);
+    assert_eq!(screen.display_offset(), 5);
+
+    screen.scroll_display(-5);
+    assert_eq!(screen.display_offset(), 0);
+}
