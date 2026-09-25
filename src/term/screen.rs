@@ -72,6 +72,19 @@ impl TermScreen {
         self.term.mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
     }
 
+    pub fn is_mouse_mode(&self) -> bool {
+        self.term.mode().intersects(
+            alacritty_terminal::term::TermMode::MOUSE_REPORT_CLICK
+                | alacritty_terminal::term::TermMode::MOUSE_DRAG
+                | alacritty_terminal::term::TermMode::MOUSE_MOTION
+                | alacritty_terminal::term::TermMode::SGR_MOUSE,
+        )
+    }
+
+    pub fn is_sgr_mouse(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::SGR_MOUSE)
+    }
+
     pub fn get_cell_char(&self, col: usize, line: usize) -> char {
         let grid = self.term.grid();
         let display_line = Line(line as i32 - grid.display_offset() as i32);

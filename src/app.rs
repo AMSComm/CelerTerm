@@ -208,7 +208,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             .with_title("CelerTerm")
             .with_inner_size(winit::dpi::LogicalSize::new(980.0, 620.0));
 
-        attrs = configure_macos_window(attrs, &self.config.window);
+        attrs = configure_macos_window(attrs, &self.config.window, self.config.macos.option_as_alt);
 
         match event_loop.create_window(attrs) {
             Ok(window) => {
@@ -265,11 +265,22 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             }
             WindowEvent::ModifiersChanged(new_mods) => {
                 self.modifiers = new_mods.state();
+                if self.config.macos.option_as_alt
+                    && let Some(ref window) = self.window
+                {
+                    // Disable macOS IME dead-key interception whenever Option is held down
+                    window.set_ime_allowed(!self.modifiers.alt_key());
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
+                // If Option/Alt is pressed, ignore dead-key characters produced by macOS IME
+                if self.modifiers.alt_key() && self.config.macos.option_as_alt {
+                    self.ime_preedit = None;
+                    return;
+                }
                 self.ime_preedit = None;
                 // Send committed IME text (Vietnamese / Japanese) to the active tab's PTY
                 if let Some(active_id) = self.active_tab_id()
@@ -283,6 +294,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Ime(Ime::Preedit(text, cursor_range)) => {
+                // Ignore dead-key composition preedits (e.g. Option+E acute '´') when Option as Alt is active
+                if self.modifiers.alt_key() && self.config.macos.option_as_alt {
+                    return;
+                }
                 if text.is_empty() {
                     self.ime_preedit = None;
                 } else {
@@ -301,14 +316,34 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     && let Some(active_id) = self.active_tab_id()
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
                 {
-                    if session.screen.is_alt_screen() {
-                        let arrow = if lines > 0 { b"\x1b[A" } else { b"\x1b[B" };
-                        for _ in 0..lines.abs() {
+                    if session.screen.is_mouse_mode() {
+                        let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                        let header_h = if self.config.window.tabs_in_titlebar { (38.0 * self.scale_factor).round() } else { 0.0 };
+                        let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                        let start_y = header_h + pad_y;
+
+                        let col = (((self.mouse_pos.0 as f32 - pad_x) / self.renderer.cell_width).floor() as i32 + 1)
+                            .clamp(1, session.screen.size.columns as i32) as usize;
+                        let row = (((self.mouse_pos.1 as f32 - start_y) / self.renderer.cell_height).floor() as i32 + 1)
+                            .clamp(1, session.screen.size.lines as i32) as usize;
+
+                        // SGR mouse mode: button 65 = wheel down, button 64 = wheel up
+                        let btn = if lines > 0 { 65 } else { 64 };
+                        let payload = format!("\x1b[<{};{};{}M", btn, col, row);
+                        for _ in 0..lines.abs().min(5) {
+                            let _ = session.writer.write_all(payload.as_bytes());
+                        }
+                        let _ = session.writer.flush();
+                    } else if session.screen.is_alt_screen() {
+                        // Alternate screen without mouse mode: lines > 0 is scroll down (Down Arrow), lines < 0 is scroll up (Up Arrow)
+                        let arrow = if lines > 0 { b"\x1b[B" } else { b"\x1b[A" };
+                        for _ in 0..lines.abs().min(5) {
                             let _ = session.writer.write_all(arrow);
                         }
                         let _ = session.writer.flush();
                     } else {
-                        session.screen.scroll_display(lines);
+                        // Normal shell: lines < 0 scrolls up into history (-lines > 0), lines > 0 scrolls down to prompt (-lines < 0)
+                        session.screen.scroll_display(-lines);
                         if let Some(ref win) = self.window {
                             win.request_redraw();
                         }

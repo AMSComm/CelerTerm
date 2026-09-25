@@ -104,9 +104,9 @@ pub fn translate_key_event(
 
     // 2. Alt / Option combinations when option_as_alt is true
     if mods.alt && option_as_alt && !mods.ctrl && !mods.logo {
-        // Physical key takes priority on macOS to bypass dead key transformations (e.g. Option+Q producing "œ")
+        // Physical key takes priority on macOS to bypass dead key transformations (e.g. Option+Q producing "œ", Option+E producing "´")
         if let Some(code) = physical_key
-            && let Some(ch) = key_code_to_ascii(code)
+            && let Some(ch) = key_code_to_ascii(code, mods.shift)
         {
             return Some(KeyAction::Bytes(vec![0x1b, ch as u8]));
         }
@@ -185,44 +185,55 @@ pub fn translate_key_event(
     None
 }
 
-fn key_code_to_ascii(code: KeyCode) -> Option<char> {
+fn key_code_to_ascii(code: KeyCode, shift: bool) -> Option<char> {
     match code {
-        KeyCode::KeyA => Some('a'),
-        KeyCode::KeyB => Some('b'),
-        KeyCode::KeyC => Some('c'),
-        KeyCode::KeyD => Some('d'),
-        KeyCode::KeyE => Some('e'),
-        KeyCode::KeyF => Some('f'),
-        KeyCode::KeyG => Some('g'),
-        KeyCode::KeyH => Some('h'),
-        KeyCode::KeyI => Some('i'),
-        KeyCode::KeyJ => Some('j'),
-        KeyCode::KeyK => Some('k'),
-        KeyCode::KeyL => Some('l'),
-        KeyCode::KeyM => Some('m'),
-        KeyCode::KeyN => Some('n'),
-        KeyCode::KeyO => Some('o'),
-        KeyCode::KeyP => Some('p'),
-        KeyCode::KeyQ => Some('q'),
-        KeyCode::KeyR => Some('r'),
-        KeyCode::KeyS => Some('s'),
-        KeyCode::KeyT => Some('t'),
-        KeyCode::KeyU => Some('u'),
-        KeyCode::KeyV => Some('v'),
-        KeyCode::KeyW => Some('w'),
-        KeyCode::KeyX => Some('x'),
-        KeyCode::KeyY => Some('y'),
-        KeyCode::KeyZ => Some('z'),
-        KeyCode::Digit0 => Some('0'),
-        KeyCode::Digit1 => Some('1'),
-        KeyCode::Digit2 => Some('2'),
-        KeyCode::Digit3 => Some('3'),
-        KeyCode::Digit4 => Some('4'),
-        KeyCode::Digit5 => Some('5'),
-        KeyCode::Digit6 => Some('6'),
-        KeyCode::Digit7 => Some('7'),
-        KeyCode::Digit8 => Some('8'),
-        KeyCode::Digit9 => Some('9'),
+        KeyCode::KeyA => Some(if shift { 'A' } else { 'a' }),
+        KeyCode::KeyB => Some(if shift { 'B' } else { 'b' }),
+        KeyCode::KeyC => Some(if shift { 'C' } else { 'c' }),
+        KeyCode::KeyD => Some(if shift { 'D' } else { 'd' }),
+        KeyCode::KeyE => Some(if shift { 'E' } else { 'e' }),
+        KeyCode::KeyF => Some(if shift { 'F' } else { 'f' }),
+        KeyCode::KeyG => Some(if shift { 'G' } else { 'g' }),
+        KeyCode::KeyH => Some(if shift { 'H' } else { 'h' }),
+        KeyCode::KeyI => Some(if shift { 'I' } else { 'i' }),
+        KeyCode::KeyJ => Some(if shift { 'J' } else { 'j' }),
+        KeyCode::KeyK => Some(if shift { 'K' } else { 'k' }),
+        KeyCode::KeyL => Some(if shift { 'L' } else { 'l' }),
+        KeyCode::KeyM => Some(if shift { 'M' } else { 'm' }),
+        KeyCode::KeyN => Some(if shift { 'N' } else { 'n' }),
+        KeyCode::KeyO => Some(if shift { 'O' } else { 'o' }),
+        KeyCode::KeyP => Some(if shift { 'P' } else { 'p' }),
+        KeyCode::KeyQ => Some(if shift { 'Q' } else { 'q' }),
+        KeyCode::KeyR => Some(if shift { 'R' } else { 'r' }),
+        KeyCode::KeyS => Some(if shift { 'S' } else { 's' }),
+        KeyCode::KeyT => Some(if shift { 'T' } else { 't' }),
+        KeyCode::KeyU => Some(if shift { 'U' } else { 'u' }),
+        KeyCode::KeyV => Some(if shift { 'V' } else { 'v' }),
+        KeyCode::KeyW => Some(if shift { 'W' } else { 'w' }),
+        KeyCode::KeyX => Some(if shift { 'X' } else { 'x' }),
+        KeyCode::KeyY => Some(if shift { 'Y' } else { 'y' }),
+        KeyCode::KeyZ => Some(if shift { 'Z' } else { 'z' }),
+        KeyCode::Digit0 => Some(if shift { ')' } else { '0' }),
+        KeyCode::Digit1 => Some(if shift { '!' } else { '1' }),
+        KeyCode::Digit2 => Some(if shift { '@' } else { '2' }),
+        KeyCode::Digit3 => Some(if shift { '#' } else { '3' }),
+        KeyCode::Digit4 => Some(if shift { '$' } else { '4' }),
+        KeyCode::Digit5 => Some(if shift { '%' } else { '5' }),
+        KeyCode::Digit6 => Some(if shift { '^' } else { '6' }),
+        KeyCode::Digit7 => Some(if shift { '&' } else { '7' }),
+        KeyCode::Digit8 => Some(if shift { '*' } else { '8' }),
+        KeyCode::Digit9 => Some(if shift { '(' } else { '9' }),
+        KeyCode::Minus => Some(if shift { '_' } else { '-' }),
+        KeyCode::Equal => Some(if shift { '+' } else { '=' }),
+        KeyCode::BracketLeft => Some(if shift { '{' } else { '[' }),
+        KeyCode::BracketRight => Some(if shift { '}' } else { ']' }),
+        KeyCode::Semicolon => Some(if shift { ':' } else { ';' }),
+        KeyCode::Quote => Some(if shift { '"' } else { '\'' }),
+        KeyCode::Comma => Some(if shift { '<' } else { ',' }),
+        KeyCode::Period => Some(if shift { '>' } else { '.' }),
+        KeyCode::Slash => Some(if shift { '?' } else { '/' }),
+        KeyCode::Backslash => Some(if shift { '|' } else { '\\' }),
+        KeyCode::Backquote => Some(if shift { '~' } else { '`' }),
         _ => None,
     }
 }

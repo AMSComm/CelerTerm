@@ -3,7 +3,11 @@ use winit::platform::macos::WindowAttributesExtMacOS;
 use winit::window::WindowAttributes;
 use crate::config::schema::WindowConfig;
 
-pub fn configure_macos_window(mut attrs: WindowAttributes, config: &WindowConfig) -> WindowAttributes {
+pub fn configure_macos_window(
+    mut attrs: WindowAttributes,
+    config: &WindowConfig,
+    option_as_alt: bool,
+) -> WindowAttributes {
     #[cfg(target_os = "macos")]
     {
         attrs = attrs
@@ -14,8 +18,13 @@ pub fn configure_macos_window(mut attrs: WindowAttributes, config: &WindowConfig
         if !config.decorations {
             attrs = attrs.with_titlebar_hidden(true);
         }
+
+        if option_as_alt {
+            attrs = attrs.with_option_as_alt(winit::platform::macos::OptionAsAlt::Both);
+        }
     }
     let _ = config;
+    let _ = option_as_alt;
     attrs
 }
 
