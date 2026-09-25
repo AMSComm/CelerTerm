@@ -1,8 +1,8 @@
 [package]
-name = "zenterm"
+name = "celerterm"
 version = "0.1.0"
 edition = "2024"
-authors = ["Huy <huy@zenterm.local>"]
+authors = ["Huy <huy@celerterm.local>"]
 description = "A high-performance minimalist GPU-accelerated terminal emulator"
 
 [dependencies]

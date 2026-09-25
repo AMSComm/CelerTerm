@@ -1,3 +1,3 @@
 fn main() {
-    println!("zenterm - minimal high performance terminal");
+    println!("celerterm - minimal high performance terminal");
 }
