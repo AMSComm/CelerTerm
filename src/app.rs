@@ -30,6 +30,7 @@ pub enum UserEvent {
         tab_id: String,
     },
     UpdateCheckResult(Result<Option<crate::update::ReleaseInfo>, String>),
+    UpdateDownloadResult(Result<PathBuf, String>),
 }
 
 pub struct TabSession {
@@ -570,17 +571,73 @@ impl CelerApp {
         }
     }
 
-    fn handle_update_modal_key(&mut self, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
+    fn trigger_primary_update_action(&mut self, event_loop: &ActiveEventLoop) {
+        match self.update_modal.state.clone() {
+            crate::update::UpdateState::Available {
+                download_url,
+                asset_name,
+                latest_version,
+                html_url,
+                ..
+            } => {
+                if let (Some(url), Some(name)) = (download_url, asset_name) {
+                    self.start_download_and_install(url, name, latest_version);
+                } else {
+                    crate::update::open_browser(&html_url);
+                }
+            }
+            crate::update::UpdateState::ReadyToRestart {
+                staged_path,
+                target_path,
+                ..
+            } => {
+                self.save_workspace_state();
+                if let Err(e) = crate::update::apply_update_and_restart(&staged_path, &target_path) {
+                    log::error!("Failed to launch update script: {}", e);
+                    self.update_modal.state = crate::update::UpdateState::Error(e);
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                } else {
+                    event_loop.exit();
+                }
+            }
+            crate::update::UpdateState::Downloading { .. } => {
+                // In progress; do nothing
+            }
+            crate::update::UpdateState::UpToDate { .. }
+            | crate::update::UpdateState::Error(_) => {
+                self.start_check_for_updates();
+            }
+            crate::update::UpdateState::Idle | crate::update::UpdateState::Checking => {}
+        }
+    }
+
+    fn start_download_and_install(&mut self, url: String, asset_name: String, version: String) {
+        self.update_modal.state = crate::update::UpdateState::Downloading {
+            latest_version: version,
+            status_text: "Downloading update package from GitHub...".to_string(),
+        };
+        if let Some(ref win) = self.window {
+            win.request_redraw();
+        }
+
+        if let Some(ref proxy) = self.proxy {
+            let proxy = proxy.clone();
+            std::thread::spawn(move || {
+                let res = crate::update::download_and_stage_update(&url, &asset_name);
+                let _ = proxy.send_event(UserEvent::UpdateDownloadResult(res));
+            });
+        }
+    }
+
+    fn handle_update_modal_key(&mut self, event_loop: &ActiveEventLoop, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
         match key {
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
                 self.update_modal.is_open = false;
             }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
-                if let crate::update::UpdateState::Available { ref html_url, .. } = self.update_modal.state {
-                    crate::update::open_browser(html_url);
-                } else {
-                    self.start_check_for_updates();
-                }
+                self.trigger_primary_update_action(event_loop);
             }
             winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("g") => {
                 crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
@@ -610,6 +667,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 current_version: crate::update::CURRENT_VERSION.to_string(),
                                 latest_version: info.tag_name,
                                 html_url: info.html_url,
+                                download_url: info.download_url,
+                                asset_name: info.asset_name,
                                 notes: info.body,
                                 published_at: info.published_at,
                             };
@@ -622,6 +681,28 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     Ok(None) => {
                         self.update_modal.state = crate::update::UpdateState::UpToDate {
                             current_version: crate::update::CURRENT_VERSION.to_string(),
+                        };
+                    }
+                    Err(err) => {
+                        self.update_modal.state = crate::update::UpdateState::Error(err);
+                    }
+                }
+                if let Some(ref window) = self.window {
+                    window.request_redraw();
+                }
+            }
+            UserEvent::UpdateDownloadResult(res) => {
+                match res {
+                    Ok(staged_path) => {
+                        let latest_version = match &self.update_modal.state {
+                            crate::update::UpdateState::Downloading { latest_version, .. } => latest_version.clone(),
+                            _ => "latest".to_string(),
+                        };
+                        let target_path = crate::update::get_target_app_path();
+                        self.update_modal.state = crate::update::UpdateState::ReadyToRestart {
+                            latest_version,
+                            staged_path,
+                            target_path,
                         };
                     }
                     Err(err) => {
@@ -906,24 +987,41 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 width: modal_w,
                                 height: modal_h,
                             };
-                            let is_available = matches!(self.update_modal.state, crate::update::UpdateState::Available { .. });
-                            let buttons = crate::window::calculate_update_modal_buttons(
+                            let (primary_label, primary_color) = match &self.update_modal.state {
+                                crate::update::UpdateState::Available { download_url, .. } => {
+                                    if download_url.is_some() {
+                                        ("[Enter] Update Now", 0x007AA2F7)
+                                    } else {
+                                        ("[Enter] Download", 0x007AA2F7)
+                                    }
+                                }
+                                crate::update::UpdateState::Downloading { .. } => {
+                                    ("[...] Downloading", 0x00565F89)
+                                }
+                                crate::update::UpdateState::ReadyToRestart { .. } => {
+                                    ("[Enter] Restart & Update", 0x009ECE6A)
+                                }
+                                crate::update::UpdateState::Error(_) => {
+                                    ("[Enter] Try Again", 0x00F7768E)
+                                }
+                                _ => {
+                                    ("[Enter] Check Again", 0x007AA2F7)
+                                }
+                            };
+                            let buttons = crate::window::calculate_update_modal_buttons_with_label(
                                 modal_rect,
                                 footer_h,
                                 scale,
                                 self.renderer.cell_width,
-                                is_available,
+                                primary_label,
+                                primary_color,
                             );
 
                             for btn in &buttons {
                                 if btn.rect.contains(mx, my) {
                                     match btn.id {
                                         "primary" => {
-                                            if let crate::update::UpdateState::Available { ref html_url, .. } = self.update_modal.state {
-                                                crate::update::open_browser(html_url);
-                                            } else {
-                                                self.start_check_for_updates();
-                                            }
+                                            self.trigger_primary_update_action(event_loop);
                                         }
                                         "github" => {
                                             crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
@@ -1233,7 +1331,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 let window = self.window.clone();
 
                 if self.update_modal.is_open {
-                    self.handle_update_modal_key(&logical_key, match physical_key {
+                    self.handle_update_modal_key(event_loop, &logical_key, match physical_key {
                         PhysicalKey::Code(c) => Some(c),
                         _ => None,
                     });
@@ -2444,6 +2542,101 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     );
                                 }
                             }
+                            crate::update::UpdateState::Downloading { latest_version, status_text } => {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top,
+                                    &format!("⏳ Downloading CelerTerm {}...", latest_version),
+                                    0x007AA2F7,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + line_h,
+                                    status_text,
+                                    0x00C0CAF5,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 2.0),
+                                    "Please wait while the update archive is downloaded and verified.",
+                                    0x00787C99,
+                                );
+
+                                // Progress bar strip
+                                let prog_y = body_top + (line_h * 3.5);
+                                let prog_w = modal_w - (40.0 * scale);
+                                let prog_h = (8.0 * scale).round();
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x as usize,
+                                    prog_y as usize,
+                                    prog_w as usize,
+                                    prog_h as usize,
+                                    0x0016161E,
+                                );
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x as usize,
+                                    prog_y as usize,
+                                    (prog_w * 0.75) as usize,
+                                    prog_h as usize,
+                                    0x007AA2F7,
+                                );
+                            }
+                            crate::update::UpdateState::ReadyToRestart { latest_version, target_path, .. } => {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top,
+                                    "🎉 Update Ready to Install!",
+                                    0x009ECE6A,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + line_h,
+                                    &format!("CelerTerm {} is ready to replace your current version.", latest_version),
+                                    0x00C0CAF5,
+                                );
+                                let target_display = target_path.display().to_string();
+                                let target_line = format!("Install Target: {}", target_display);
+                                let t_line = if target_line.len() > 50 { &target_line[..50] } else { &target_line };
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 2.2),
+                                    t_line,
+                                    0x00787C99,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 3.5),
+                                    "Click [Restart & Update] to apply the update and relaunch.",
+                                    0x009ECE6A,
+                                );
+                            }
                             crate::update::UpdateState::Error(err) => {
                                 self.renderer.draw_text(
                                     &mut buffer,
@@ -2514,13 +2707,34 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             width: modal_w,
                             height: modal_h,
                         };
-                        let is_available = matches!(self.update_modal.state, crate::update::UpdateState::Available { .. });
-                        let footer_buttons = crate::window::calculate_update_modal_buttons(
+                        let (primary_label, primary_color) = match &self.update_modal.state {
+                            crate::update::UpdateState::Available { download_url, .. } => {
+                                if download_url.is_some() {
+                                    ("[Enter] Update Now", 0x007AA2F7)
+                                } else {
+                                    ("[Enter] Download", 0x007AA2F7)
+                                }
+                            }
+                            crate::update::UpdateState::Downloading { .. } => {
+                                ("[...] Downloading", 0x00565F89)
+                            }
+                            crate::update::UpdateState::ReadyToRestart { .. } => {
+                                ("[Enter] Restart & Update", 0x009ECE6A)
+                            }
+                            crate::update::UpdateState::Error(_) => {
+                                ("[Enter] Try Again", 0x00F7768E)
+                            }
+                            _ => {
+                                ("[Enter] Check Again", 0x007AA2F7)
+                            }
+                        };
+                        let footer_buttons = crate::window::calculate_update_modal_buttons_with_label(
                             modal_rect,
                             footer_h,
                             scale,
                             self.renderer.cell_width,
-                            is_available,
+                            primary_label,
+                            primary_color,
                         );
 
                         let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);

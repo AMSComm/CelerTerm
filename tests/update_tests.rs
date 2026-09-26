@@ -118,3 +118,76 @@ fn test_fetch_latest_release_live() {
     assert!(res.is_ok(), "Live GitHub API fetch must not fail: {:?}", res);
 }
 
+#[test]
+fn test_find_platform_asset_matching() {
+    use celerterm::update::{find_platform_asset, GithubAsset};
+
+    let assets = vec![
+        GithubAsset {
+            name: "celerterm-linux-x86_64.tar.gz".to_string(),
+            browser_download_url: "https://example.com/linux.tar.gz".to_string(),
+            size: 1000,
+        },
+        GithubAsset {
+            name: "CelerTerm-macOS.dmg".to_string(),
+            browser_download_url: "https://example.com/mac.dmg".to_string(),
+            size: 2000,
+        },
+        GithubAsset {
+            name: "CelerTerm-macOS.app.zip".to_string(),
+            browser_download_url: "https://example.com/mac.app.zip".to_string(),
+            size: 3000,
+        },
+    ];
+
+    let matched = find_platform_asset(&assets);
+    assert!(matched.is_some());
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS, .app.zip is preferred for in-place auto-update
+        assert_eq!(matched.unwrap().name, "CelerTerm-macOS.app.zip");
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux, .tar.gz is preferred
+        assert_eq!(matched.unwrap().name, "celerterm-linux-x86_64.tar.gz");
+    }
+}
+
+#[test]
+fn test_update_modal_buttons_with_custom_labels() {
+    use celerterm::window::calculate_update_modal_buttons_with_label;
+
+    let modal = Rect {
+        x: 100.0,
+        y: 80.0,
+        width: 520.0,
+        height: 280.0,
+    };
+
+    // 1. Update Now
+    let btns1 = calculate_update_modal_buttons_with_label(modal, 42.0, 1.0, 8.5, "[Enter] Update Now", 0x009ECE6A);
+    assert_eq!(btns1[0].label, "[Enter] Update Now");
+    assert_eq!(btns1[0].color, 0x009ECE6A);
+
+    // 2. Downloading
+    let btns2 = calculate_update_modal_buttons_with_label(modal, 42.0, 1.0, 8.5, "[...] Downloading", 0x00E0AF68);
+    assert_eq!(btns2[0].label, "[...] Downloading");
+    assert_eq!(btns2[0].color, 0x00E0AF68);
+
+    // 3. Restart & Update
+    let btns3 = calculate_update_modal_buttons_with_label(modal, 42.0, 1.0, 8.5, "[Enter] Restart & Update", 0x007AA2F7);
+    assert_eq!(btns3[0].label, "[Enter] Restart & Update");
+    assert_eq!(btns3[0].color, 0x007AA2F7);
+}
+
+#[test]
+fn test_get_target_app_path_validity() {
+    let target = celerterm::update::get_target_app_path();
+    assert!(!target.as_os_str().is_empty());
+    #[cfg(target_os = "macos")]
+    {
+        assert!(target.to_string_lossy().ends_with(".app"));
+    }
+}
+

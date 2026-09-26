@@ -198,12 +198,23 @@ pub fn calculate_update_modal_buttons(
     cell_w: f32,
     is_available: bool,
 ) -> [ModalButton; 3] {
+    let primary_text = if is_available { "[Enter] Download" } else { "[Enter] Check Again" };
+    calculate_update_modal_buttons_with_label(modal_rect, footer_h, scale, cell_w, primary_text, 0x007AA2F7)
+}
+
+pub fn calculate_update_modal_buttons_with_label(
+    modal_rect: Rect,
+    footer_h: f32,
+    scale: f32,
+    cell_w: f32,
+    primary_text: &'static str,
+    primary_color: u32,
+) -> [ModalButton; 3] {
     let btn_h = (footer_h - 14.0 * scale).max(20.0);
     let btn_y = modal_rect.y + modal_rect.height - footer_h + ((footer_h - btn_h) * 0.5);
 
-    let primary_text = if is_available { "[Enter] Download" } else { "[Enter] Check Again" };
     let items: [(&'static str, &'static str, u32); 3] = [
-        ("primary", primary_text, 0x007AA2F7),
+        ("primary", primary_text, primary_color),
         ("github", "[g] GitHub", 0x00BB9AF7),
         ("close", "[Esc] Close", 0x00565F89),
     ];
