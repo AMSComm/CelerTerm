@@ -101,6 +101,92 @@ fn test_alt_backspace_word_delete() {
         translate_key(&Key::Named(NamedKey::Backspace), mods, true),
         Some(KeyAction::Bytes(vec![0x1b, 0x7f]))
     );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Backspace), mods, false),
+        Some(KeyAction::Bytes(vec![0x1b, 0x7f]))
+    );
+}
+
+#[test]
+fn test_option_arrow_word_navigation() {
+    use celerterm::term::keymap::translate_key_event;
+    use winit::keyboard::KeyCode;
+
+    let mods = Modifiers {
+        alt: true,
+        ctrl: false,
+        shift: false,
+        logo: false,
+    };
+
+    // Option+Left moves backward word (ESC b -> b"\x1bb")
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowLeft), mods, true),
+        Some(KeyAction::Bytes(b"\x1bb".to_vec()))
+    );
+    // Option+Right moves forward word (ESC f -> b"\x1bf")
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowRight), mods, true),
+        Some(KeyAction::Bytes(b"\x1bf".to_vec()))
+    );
+
+    // Should also work when option_as_alt is false (arrow navigation is not text composition)
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowLeft), mods, false),
+        Some(KeyAction::Bytes(b"\x1bb".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowRight), mods, false),
+        Some(KeyAction::Bytes(b"\x1bf".to_vec()))
+    );
+
+    // Physical key code support (e.g. macOS winit keyboard event)
+    let action_phys_left = translate_key_event(
+        &Key::Named(NamedKey::ArrowLeft),
+        Some(KeyCode::ArrowLeft),
+        mods,
+        true,
+    );
+    assert_eq!(action_phys_left, Some(KeyAction::Bytes(b"\x1bb".to_vec())));
+
+    let action_phys_right = translate_key_event(
+        &Key::Named(NamedKey::ArrowRight),
+        Some(KeyCode::ArrowRight),
+        mods,
+        true,
+    );
+    assert_eq!(action_phys_right, Some(KeyAction::Bytes(b"\x1bf".to_vec())));
+}
+
+#[test]
+fn test_option_delete_word() {
+    use celerterm::term::keymap::translate_key_event;
+    use winit::keyboard::KeyCode;
+
+    let mods = Modifiers {
+        alt: true,
+        ctrl: false,
+        shift: false,
+        logo: false,
+    };
+
+    // Option+Delete deletes word forward (ESC d -> b"\x1bd")
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Delete), mods, true),
+        Some(KeyAction::Bytes(b"\x1bd".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Delete), mods, false),
+        Some(KeyAction::Bytes(b"\x1bd".to_vec()))
+    );
+
+    let action_phys_del = translate_key_event(
+        &Key::Named(NamedKey::Delete),
+        Some(KeyCode::Delete),
+        mods,
+        true,
+    );
+    assert_eq!(action_phys_del, Some(KeyAction::Bytes(b"\x1bd".to_vec())));
 }
 
 #[test]

@@ -135,23 +135,39 @@ pub fn translate_key_event(
         }
     }
 
-    // 2. Alt / Option combinations when option_as_alt is true
-    if mods.alt && option_as_alt && !mods.ctrl && !mods.logo {
-        // Physical key takes priority on macOS to bypass dead key transformations (e.g. Option+Q producing "œ", Option+E producing "´")
-        if let Some(code) = physical_key
-            && let Some(ch) = key_code_to_ascii(code, mods.shift)
-        {
-            return Some(KeyAction::Bytes(vec![0x1b, ch as u8]));
+    // 2. Alt / Option combinations
+    if mods.alt && !mods.ctrl && !mods.logo {
+        // Physical key takes priority on macOS to bypass dead key transformations
+        if let Some(code) = physical_key {
+            match code {
+                KeyCode::ArrowLeft => return Some(KeyAction::Bytes(b"\x1bb".to_vec())),
+                KeyCode::ArrowRight => return Some(KeyAction::Bytes(b"\x1bf".to_vec())),
+                KeyCode::Backspace => return Some(KeyAction::Bytes(vec![0x1b, 0x7f])),
+                KeyCode::Delete => return Some(KeyAction::Bytes(b"\x1bd".to_vec())),
+                _ => {}
+            }
+            if option_as_alt && let Some(ch) = key_code_to_ascii(code, mods.shift) {
+                return Some(KeyAction::Bytes(vec![0x1b, ch as u8]));
+            }
         }
 
         match key {
-            Key::Character(s) => {
-                let mut bytes = vec![0x1b];
-                bytes.extend_from_slice(s.as_bytes());
-                return Some(KeyAction::Bytes(bytes));
+            Key::Named(NamedKey::ArrowLeft) => {
+                return Some(KeyAction::Bytes(b"\x1bb".to_vec()));
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                return Some(KeyAction::Bytes(b"\x1bf".to_vec()));
             }
             Key::Named(NamedKey::Backspace) => {
                 return Some(KeyAction::Bytes(vec![0x1b, 0x7f]));
+            }
+            Key::Named(NamedKey::Delete) => {
+                return Some(KeyAction::Bytes(b"\x1bd".to_vec()));
+            }
+            Key::Character(s) if option_as_alt => {
+                let mut bytes = vec![0x1b];
+                bytes.extend_from_slice(s.as_bytes());
+                return Some(KeyAction::Bytes(bytes));
             }
             _ => {}
         }
@@ -170,15 +186,24 @@ pub fn translate_key_event(
                 return Some(KeyAction::Bytes(b"\x1b[B".to_vec()));
             }
             NamedKey::ArrowRight => {
+                if mods.alt && !mods.ctrl && !mods.logo {
+                    return Some(KeyAction::Bytes(b"\x1bf".to_vec()));
+                }
                 return Some(KeyAction::Bytes(b"\x1b[C".to_vec()));
             }
             NamedKey::ArrowLeft => {
+                if mods.alt && !mods.ctrl && !mods.logo {
+                    return Some(KeyAction::Bytes(b"\x1bb".to_vec()));
+                }
                 return Some(KeyAction::Bytes(b"\x1b[D".to_vec()));
             }
             NamedKey::Enter => {
                 return Some(KeyAction::Bytes(b"\r".to_vec()));
             }
             NamedKey::Backspace => {
+                if mods.alt && !mods.ctrl && !mods.logo {
+                    return Some(KeyAction::Bytes(vec![0x1b, 0x7f]));
+                }
                 return Some(KeyAction::Bytes(vec![0x7f]));
             }
             NamedKey::Tab => {
@@ -204,6 +229,9 @@ pub fn translate_key_event(
                 return Some(KeyAction::Bytes(b"\x1b[6~".to_vec()));
             }
             NamedKey::Delete => {
+                if mods.alt && !mods.ctrl && !mods.logo {
+                    return Some(KeyAction::Bytes(b"\x1bd".to_vec()));
+                }
                 return Some(KeyAction::Bytes(b"\x1b[3~".to_vec()));
             }
             _ => {}
