@@ -27,28 +27,47 @@ pub type SharedPtyWriter = Arc<Mutex<Box<dyn IoWrite + Send>>>;
 #[derive(Clone, Default)]
 pub struct PtySink {
     inner: Arc<Mutex<Option<SharedPtyWriter>>>,
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl PtySink {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(None)),
+            title: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn set_writer(&self, writer: SharedPtyWriter) {
         *self.inner.lock() = Some(writer);
     }
+
+    pub fn dynamic_title(&self) -> Option<String> {
+        self.title.lock().clone()
+    }
+
+    pub fn reset_dynamic_title(&self) {
+        *self.title.lock() = None;
+    }
 }
 
 impl EventListener for PtySink {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event
-            && let Some(writer) = self.inner.lock().as_ref()
-        {
-            let mut w = writer.lock();
-            let _ = w.write_all(text.as_bytes());
-            let _ = w.flush();
+        match event {
+            Event::PtyWrite(text) => {
+                if let Some(writer) = self.inner.lock().as_ref() {
+                    let mut w = writer.lock();
+                    let _ = w.write_all(text.as_bytes());
+                    let _ = w.flush();
+                }
+            }
+            Event::Title(t) => {
+                *self.title.lock() = Some(t);
+            }
+            Event::ResetTitle => {
+                *self.title.lock() = None;
+            }
+            _ => {}
         }
     }
 }
@@ -79,6 +98,14 @@ impl TermScreen {
 
     pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn IoWrite + Send>>>) {
         self.sink.set_writer(writer);
+    }
+
+    pub fn dynamic_title(&self) -> Option<String> {
+        self.sink.dynamic_title()
+    }
+
+    pub fn reset_dynamic_title(&self) {
+        self.sink.reset_dynamic_title();
     }
 
     pub fn process_bytes(&mut self, bytes: &[u8]) {

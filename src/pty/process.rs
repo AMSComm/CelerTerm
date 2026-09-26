@@ -112,17 +112,32 @@ pub fn get_process_name(pid: u32) -> Option<String> {
 pub fn format_tab_title(
     foreground_proc: Option<&str>,
     cwd: Option<&Path>,
+    dynamic_title: Option<&str>,
 ) -> String {
-    // 1. If a foreground process is running and it's not a common shell
-    if let Some(proc) = foreground_proc {
-        let p = proc.trim();
-        let is_shell = matches!(p, "zsh" | "bash" | "sh" | "fish" | "csh" | "tcsh" | "dash");
-        if !is_shell && !p.is_empty() {
-            return p.to_string();
+    let proc = foreground_proc.map(|p| p.trim()).unwrap_or("");
+    let is_ssh = proc == "ssh" || proc.starts_with("ssh ") || proc == "mosh-client";
+
+    // 1. If inside an SSH session: prefix with [🌐...]
+    if is_ssh {
+        if let Some(dyn_title) = dynamic_title {
+            let t = dyn_title.trim();
+            if !t.is_empty() {
+                let proc_name = extract_ssh_process_or_title(t);
+                return format!("[🌐{}]", proc_name);
+            }
+        }
+        return "[🌐ssh]".to_string();
+    }
+
+    // 2. If a local foreground process is running and it's not a common shell
+    if !proc.is_empty() {
+        let is_shell = matches!(proc, "zsh" | "bash" | "sh" | "fish" | "csh" | "tcsh" | "dash");
+        if !is_shell {
+            return proc.to_string();
         }
     }
 
-    // 2. Otherwise, show the folder name (or ~ for home)
+    // 4. Otherwise, show the folder name (or ~ for home)
     if let Some(path) = cwd {
         if let Some(base_dirs) = directories::BaseDirs::new()
             && path == base_dirs.home_dir()
@@ -139,4 +154,46 @@ pub fn format_tab_title(
     }
 
     "Shell".to_string()
+}
+
+pub fn extract_ssh_process_or_title(t: &str) -> String {
+    let trimmed = t.trim();
+    if trimmed.is_empty() {
+        return "ssh".to_string();
+    }
+    // Remote bash/zsh titles often look like "user@host: ~/path" or "user@host: tail -f ..." or "user@host: ~/dir - tail"
+    if let Some((_, after_colon)) = trimmed.split_once(':') {
+        let after = after_colon.trim();
+        // Check for trailing command: "user@host: ~/path - tail"
+        if let Some((_, cmd)) = after.rsplit_once(" - ") {
+            let cmd = cmd.trim();
+            if !cmd.is_empty() {
+                return cmd.split_whitespace().next().unwrap_or(cmd).to_string();
+            }
+        }
+        // If it starts with / or ~, it might be "user@host: ~" or "user@host: /var/log"
+        if after.starts_with('/') || after.starts_with('~') {
+            if let Some((_path, cmd)) = after.split_once(' ') {
+                let cmd = cmd.trim();
+                if !cmd.is_empty() {
+                    return cmd.split_whitespace().next().unwrap_or(cmd).to_string();
+                }
+            }
+            if let Some(folder) = Path::new(after).file_name() {
+                return folder.to_string_lossy().to_string();
+            }
+            return after.to_string();
+        } else {
+            // e.g. "user@host: tail -f ..." -> cmd is "tail"
+            if let Some(cmd) = after.split_whitespace().next() {
+                return cmd.to_string();
+            }
+        }
+    }
+    // If no colon, take the first word or the full string
+    if let Some(cmd) = trimmed.split_whitespace().next() {
+        cmd.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }

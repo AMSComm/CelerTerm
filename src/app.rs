@@ -442,16 +442,25 @@ impl CelerApp {
                         tab.cwd = cwd;
                     }
 
-                    // Determine title: foreground process name if running, or cwd folder name
+                    let dyn_title = session.screen.dynamic_title();
+
+                    let mut is_ssh = false;
                     if let Some(fpid) = fg_pid
                         && child_pid != Some(fpid) && fpid > 0
                     {
                         let proc_name = crate::pty::get_process_name(fpid);
-                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd));
-                        continue;
+                        if let Some(ref p) = proc_name {
+                            let p_trim = p.trim();
+                            is_ssh = p_trim == "ssh" || p_trim.starts_with("ssh ") || p_trim == "mosh-client";
+                        }
+                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd), dyn_title.as_deref());
+                    } else {
+                        tab.title = crate::pty::format_tab_title(None, Some(&tab.cwd), dyn_title.as_deref());
                     }
 
-                    tab.title = crate::pty::format_tab_title(None, Some(&tab.cwd));
+                    if !is_ssh && dyn_title.is_some() {
+                        session.screen.reset_dynamic_title();
+                    }
                 }
             }
         }
@@ -474,7 +483,8 @@ impl CelerApp {
                         } else {
                             None
                         };
-                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd));
+                        let dyn_title = session.screen.dynamic_title();
+                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd), dyn_title.as_deref());
                     }
                     if save_scrollback {
                         tab.scrollback_cache = session.screen.get_scrollback_lines(max_lines);

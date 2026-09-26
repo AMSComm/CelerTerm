@@ -192,39 +192,61 @@ fn test_format_tab_title_logic() {
 
     // 1. Non-shell foreground process overrides folder name
     assert_eq!(
-        format_tab_title(Some("nvim"), Some(&PathBuf::from("/Users/test/my_project"))),
+        format_tab_title(Some("nvim"), Some(&PathBuf::from("/Users/test/my_project")), None),
         "nvim"
     );
     assert_eq!(
-        format_tab_title(Some("cargo"), Some(&PathBuf::from("/Users/test/my_project"))),
+        format_tab_title(Some("cargo"), Some(&PathBuf::from("/Users/test/my_project")), None),
         "cargo"
     );
     assert_eq!(
-        format_tab_title(Some("python3"), Some(&PathBuf::from("/Users/test/my_project"))),
+        format_tab_title(Some("python3"), Some(&PathBuf::from("/Users/test/my_project")), None),
         "python3"
     );
 
     // 2. Shell foreground process falls back to folder name
     assert_eq!(
-        format_tab_title(Some("zsh"), Some(&PathBuf::from("/Users/test/my_project"))),
+        format_tab_title(Some("zsh"), Some(&PathBuf::from("/Users/test/my_project")), None),
         "my_project"
     );
     assert_eq!(
-        format_tab_title(Some("bash"), Some(&PathBuf::from("/Users/test/my_project"))),
+        format_tab_title(Some("bash"), Some(&PathBuf::from("/Users/test/my_project")), None),
         "my_project"
     );
     assert_eq!(
-        format_tab_title(None, Some(&PathBuf::from("/Users/test/my_project"))),
+        format_tab_title(None, Some(&PathBuf::from("/Users/test/my_project")), None),
         "my_project"
     );
 
     // 3. User home directory displays as ~
     if let Some(base_dirs) = directories::BaseDirs::new() {
         assert_eq!(
-            format_tab_title(None, Some(base_dirs.home_dir())),
+            format_tab_title(None, Some(base_dirs.home_dir()), None),
             "~"
         );
     }
+
+    // 4. SSH session formatting with remote process detection
+    assert_eq!(
+        format_tab_title(Some("ssh"), Some(&PathBuf::from("/Users/test")), None),
+        "[🌐ssh]"
+    );
+    assert_eq!(
+        format_tab_title(Some("ssh"), Some(&PathBuf::from("/Users/test")), Some("tail")),
+        "[🌐tail]"
+    );
+    assert_eq!(
+        format_tab_title(Some("ssh"), Some(&PathBuf::from("/Users/test")), Some("user@server: tail -f /var/log/syslog")),
+        "[🌐tail]"
+    );
+    assert_eq!(
+        format_tab_title(Some("ssh"), Some(&PathBuf::from("/Users/test")), Some("user@server: ~/dev - nvim")),
+        "[🌐nvim]"
+    );
+    assert_eq!(
+        format_tab_title(Some("ssh"), Some(&PathBuf::from("/Users/test")), Some("user@server: ~")),
+        "[🌐~]"
+    );
 }
 
 #[test]

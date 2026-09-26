@@ -59,7 +59,7 @@ impl WorkspaceManager {
         let default_cwd = directories::BaseDirs::new()
             .map(|b| b.home_dir().to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-        let initial_title = crate::pty::format_tab_title(None, Some(&default_cwd));
+        let initial_title = crate::pty::format_tab_title(None, Some(&default_cwd), None);
         let default_tab = Tab::new("tab_1", initial_title, default_cwd);
         let default_ws = Workspace {
             id: "ws_default".to_string(),
@@ -86,7 +86,7 @@ impl WorkspaceManager {
     pub fn new_tab(&mut self, cwd: PathBuf) -> Result<String, String> {
         let tab_id = format!("tab_{}", self.next_id);
         self.next_id += 1;
-        let initial_title = crate::pty::format_tab_title(None, Some(&cwd));
+        let initial_title = crate::pty::format_tab_title(None, Some(&cwd), None);
         let tab = Tab::new(&tab_id, initial_title, cwd);
 
         let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
@@ -121,7 +121,7 @@ impl WorkspaceManager {
         let cwd = directories::BaseDirs::new()
             .map(|b| b.home_dir().to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
-        let initial_title = crate::pty::format_tab_title(None, Some(&cwd));
+        let initial_title = crate::pty::format_tab_title(None, Some(&cwd), None);
         let tab = Tab::new(&tab_id, initial_title, cwd);
         let ws = Workspace {
             id: ws_id.clone(),
