@@ -24,5 +24,7 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>CelerTerm requires local network access to connect to local devices, SSH servers, and development environments.</string>
 </dict>
 </plist>

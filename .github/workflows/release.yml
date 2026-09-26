@@ -52,6 +52,8 @@ jobs:
           chmod +x CelerTerm.app/Contents/MacOS/celerterm
           cp assets/Info.plist CelerTerm.app/Contents/Info.plist
           cp assets/AppIcon.icns CelerTerm.app/Contents/Resources/AppIcon.icns
+          # Ad-hoc sign app bundle so macOS Sequoia TCC properly recognizes identity
+          codesign --force --deep -s - CelerTerm.app
 
       - name: Create DMG and ZIP
         run: |

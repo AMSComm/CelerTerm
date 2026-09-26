@@ -146,6 +146,7 @@ pub fn translate_key_event(
                 KeyCode::ArrowRight => return Some(KeyAction::Bytes(b"\x1bf".to_vec())),
                 KeyCode::Backspace => return Some(KeyAction::Bytes(vec![0x1b, 0x7f])),
                 KeyCode::Delete => return Some(KeyAction::Bytes(b"\x1bd".to_vec())),
+                KeyCode::Enter | KeyCode::NumpadEnter => return Some(KeyAction::Bytes(b"\x1b\r".to_vec())),
                 _ => {}
             }
             if option_as_alt && let Some(ch) = key_code_to_ascii(code, mods.shift) {
@@ -175,6 +176,15 @@ pub fn translate_key_event(
         }
     }
 
+    // 2.1 Shift+Enter / Ctrl+Enter multiline newline support (e.g. for agy, claude, multiline prompts)
+    if (mods.shift || mods.ctrl) && !mods.alt && !mods.logo {
+        if let Some(code) = physical_key {
+            if code == KeyCode::Enter || code == KeyCode::NumpadEnter {
+                return Some(KeyAction::Bytes(b"\n".to_vec()));
+            }
+        }
+    }
+
     // 3. Named keys (Arrows, Enter, Backspace, Space, etc.)
     if let Key::Named(named) = key {
         match named {
@@ -200,6 +210,12 @@ pub fn translate_key_event(
                 return Some(KeyAction::Bytes(b"\x1b[D".to_vec()));
             }
             NamedKey::Enter => {
+                if mods.alt && !mods.ctrl && !mods.logo {
+                    return Some(KeyAction::Bytes(b"\x1b\r".to_vec()));
+                }
+                if mods.shift || mods.ctrl {
+                    return Some(KeyAction::Bytes(b"\n".to_vec()));
+                }
                 return Some(KeyAction::Bytes(b"\r".to_vec()));
             }
             NamedKey::Backspace => {
@@ -242,6 +258,9 @@ pub fn translate_key_event(
 
     // 4. Standard text fallback
     if let Key::Character(s) = key {
+        if (mods.shift || mods.ctrl) && !mods.alt && !mods.logo && (s == "\r" || s == "\n") {
+            return Some(KeyAction::Bytes(b"\n".to_vec()));
+        }
         return Some(KeyAction::Text(s.to_string()));
     }
 

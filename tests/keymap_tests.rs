@@ -88,6 +88,65 @@ fn test_named_keys_arrows_and_enter() {
 }
 
 #[test]
+fn test_shift_and_ctrl_enter_multiline_newline() {
+    use celerterm::term::keymap::translate_key_event;
+    use winit::keyboard::KeyCode;
+
+    // Shift + Enter sends Line Feed (\n -> 0x0A) for multiline CLI inputs (agy, claude, etc.)
+    let shift_mods = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Enter), shift_mods, true),
+        Some(KeyAction::Bytes(b"\n".to_vec()))
+    );
+
+    // Ctrl + Enter also sends Line Feed (\n -> 0x0A)
+    let ctrl_mods = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Enter), ctrl_mods, true),
+        Some(KeyAction::Bytes(b"\n".to_vec()))
+    );
+
+    // Alt + Enter sends ESC + CR (\x1b\r)
+    let alt_mods = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Enter), alt_mods, true),
+        Some(KeyAction::Bytes(b"\x1b\r".to_vec()))
+    );
+
+    // Physical key code for Shift + Enter
+    let action_phys_shift_enter = translate_key_event(
+        &Key::Named(NamedKey::Enter),
+        Some(KeyCode::Enter),
+        shift_mods,
+        true,
+    );
+    assert_eq!(action_phys_shift_enter, Some(KeyAction::Bytes(b"\n".to_vec())));
+
+    let action_phys_numpad_enter = translate_key_event(
+        &Key::Named(NamedKey::Enter),
+        Some(KeyCode::NumpadEnter),
+        shift_mods,
+        true,
+    );
+    assert_eq!(action_phys_numpad_enter, Some(KeyAction::Bytes(b"\n".to_vec())));
+
+    // Fallback Character("\r") with Shift
+    assert_eq!(
+        translate_key(&Key::Character("\r".into()), shift_mods, true),
+        Some(KeyAction::Bytes(b"\n".to_vec()))
+    );
+}
+
+#[test]
 fn test_alt_backspace_word_delete() {
     let mods = Modifiers {
         alt: true,
