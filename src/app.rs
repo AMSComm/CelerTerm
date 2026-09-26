@@ -60,11 +60,36 @@ impl TabSession {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceModalMode {
+    List,
+    Renaming { input: String },
+    Creating { input: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceModalState {
+    pub is_open: bool,
+    pub selected_index: usize,
+    pub mode: WorkspaceModalMode,
+}
+
+impl Default for WorkspaceModalState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            selected_index: 0,
+            mode: WorkspaceModalMode::List,
+        }
+    }
+}
+
 pub struct CelerApp {
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     config: crate::config::Config,
     workspace_mgr: WorkspaceManager,
+    workspace_modal: WorkspaceModalState,
     tab_sessions: HashMap<String, TabSession>,
     renderer: TextRenderer,
     modifiers: ModifiersState,
@@ -105,6 +130,27 @@ impl CelerApp {
             }
         }
 
+        // Support --workspace <name> CLI flag to open directly into a named workspace
+        let mut target_ws = None;
+        let args: Vec<String> = std::env::args().collect();
+        let mut i = 1;
+        while i < args.len() {
+            if (args[i] == "--workspace" || args[i] == "-w") && i + 1 < args.len() {
+                target_ws = Some(args[i + 1].clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+
+        if let Some(ref ws_name) = target_ws {
+            if let Some(existing) = workspace_mgr.workspaces.iter().find(|w| &w.name == ws_name) {
+                workspace_mgr.active_workspace_id = existing.id.clone();
+            } else if let Ok(new_id) = workspace_mgr.new_workspace(ws_name) {
+                workspace_mgr.active_workspace_id = new_id;
+            }
+        }
+
         let cols = 100;
         let rows = 30;
         let renderer = TextRenderer::with_options(
@@ -120,6 +166,7 @@ impl CelerApp {
             surface: None,
             config,
             workspace_mgr,
+            workspace_modal: WorkspaceModalState::default(),
             tab_sessions: HashMap::new(),
             renderer,
             modifiers: ModifiersState::default(),
@@ -142,6 +189,20 @@ impl CelerApp {
             self.config.font.line_height,
             self.config.font.ligatures,
         );
+    }
+
+    pub fn reload_config(&mut self) {
+        self.config = load_config();
+        self.update_renderer();
+        let window = self.window.clone();
+        if let Some(ref win) = window {
+            let size = win.inner_size();
+            self.recalculate_grid(size.width as f32, size.height as f32);
+            #[cfg(target_os = "macos")]
+            apply_traffic_lights_visibility(win, self.config.window.hide_traffic_lights);
+            win.request_redraw();
+        }
+        info!("Configuration reloaded from disk");
     }
 
     pub fn recalculate_grid(&mut self, width: f32, height: f32) {
@@ -318,6 +379,156 @@ impl CelerApp {
             }
         }
     }
+
+    fn handle_modal_key(&mut self, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
+        match &mut self.workspace_modal.mode {
+            WorkspaceModalMode::Renaming { input } => {
+                match key {
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                        let trimmed = input.trim().to_string();
+                        if !trimmed.is_empty() {
+                            let idx = self.workspace_modal.selected_index;
+                            if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                let id = ws.id.clone();
+                                let _ = self.workspace_mgr.rename_workspace(&id, &trimmed);
+                                self.save_workspace_state();
+                            }
+                        }
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                        input.pop();
+                    }
+                    winit::keyboard::Key::Character(s) => {
+                        input.push_str(s);
+                    }
+                    _ => {}
+                }
+            }
+            WorkspaceModalMode::Creating { input } => {
+                match key {
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                        let name = if input.trim().is_empty() {
+                            format!("Workspace {}", self.workspace_mgr.workspaces.len() + 1)
+                        } else {
+                            input.trim().to_string()
+                        };
+                        if let Ok(_new_ws_id) = self.workspace_mgr.new_workspace(&name) {
+                            if let Some(active_id) = self.active_tab_id() {
+                                let cwd = self.get_active_tab_cwd();
+                                let _ = self.spawn_tab_session(&active_id, Some(&cwd));
+                            }
+                            self.save_workspace_state();
+                            self.workspace_modal.selected_index = self.workspace_mgr.workspaces.len().saturating_sub(1);
+                        }
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                        self.workspace_modal.is_open = false;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                        input.pop();
+                    }
+                    winit::keyboard::Key::Character(s) => {
+                        input.push_str(s);
+                    }
+                    _ => {}
+                }
+            }
+            WorkspaceModalMode::List => {
+                match key {
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                        self.workspace_modal.is_open = false;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                        self.workspace_modal.selected_index = self.workspace_modal.selected_index.saturating_sub(1);
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                        if self.workspace_modal.selected_index + 1 < self.workspace_mgr.workspaces.len() {
+                            self.workspace_modal.selected_index += 1;
+                        }
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                        let idx = self.workspace_modal.selected_index;
+                        if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                            let target_id = ws.id.clone();
+                            let _ = self.workspace_mgr.switch_workspace(&target_id);
+                            if let Some(active_id) = self.active_tab_id() {
+                                self.ensure_tab_session(&active_id);
+                            }
+                            self.save_workspace_state();
+                        }
+                        self.workspace_modal.is_open = false;
+                    }
+                    winit::keyboard::Key::Character(s) => {
+                        match s.as_str() {
+                            "n" | "N" => {
+                                self.workspace_modal.mode = WorkspaceModalMode::Creating { input: String::new() };
+                            }
+                            "r" | "R" => {
+                                let idx = self.workspace_modal.selected_index;
+                                if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                    self.workspace_modal.mode = WorkspaceModalMode::Renaming { input: ws.name.clone() };
+                                }
+                            }
+                            "d" | "D" => {
+                                if self.workspace_mgr.workspaces.len() > 1 {
+                                    let idx = self.workspace_modal.selected_index;
+                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                        let target_id = ws.id.clone();
+                                        let _ = self.workspace_mgr.delete_workspace(&target_id);
+                                        self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
+                                        if let Some(active_id) = self.active_tab_id() {
+                                            self.ensure_tab_session(&active_id);
+                                        }
+                                        self.save_workspace_state();
+                                    }
+                                }
+                            }
+                            "w" | "W" => {
+                                let idx = self.workspace_modal.selected_index;
+                                if let Some(ws) = self.workspace_mgr.workspaces.get(idx)
+                                    && let Ok(exe) = std::env::current_exe()
+                                {
+                                    let _ = std::process::Command::new(exe)
+                                        .arg("--workspace")
+                                        .arg(&ws.name)
+                                        .spawn();
+                                }
+                                self.workspace_modal.is_open = false;
+                            }
+                            "k" => {
+                                self.workspace_modal.selected_index = self.workspace_modal.selected_index.saturating_sub(1);
+                            }
+                            "j" => {
+                                if self.workspace_modal.selected_index + 1 < self.workspace_mgr.workspaces.len() {
+                                    self.workspace_modal.selected_index += 1;
+                                }
+                            }
+                            _ => {
+                                if let Ok(num) = s.parse::<usize>()
+                                    && num >= 1 && num <= self.workspace_mgr.workspaces.len()
+                                {
+                                    let target_id = self.workspace_mgr.workspaces[num - 1].id.clone();
+                                    let _ = self.workspace_mgr.switch_workspace(&target_id);
+                                    if let Some(active_id) = self.active_tab_id() {
+                                        self.ensure_tab_session(&active_id);
+                                    }
+                                    self.save_workspace_state();
+                                    self.workspace_modal.is_open = false;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for CelerApp {
@@ -414,6 +625,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                 self.surface = Some(surface);
                 self.window = Some(window);
+                #[cfg(target_os = "macos")]
+                crate::window::macos::set_macos_app_icon(include_bytes!("../assets/icon.png"));
                 info!("CelerTerm initialized successfully.");
             }
             Err(e) => eprintln!("Error creating window: {e}"),
@@ -540,6 +753,133 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 let window = self.window.clone();
                 if let Some(ref window) = window {
                     let size = window.inner_size();
+                    let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+
+                    if self.workspace_modal.is_open {
+                        if button == MouseButton::Left {
+                            let (width, height) = (size.width as f32, size.height as f32);
+                            let scale = self.scale_factor;
+                            let modal_w = (520.0 * scale).min(width - 40.0);
+                            let header_h = (36.0 * scale).round();
+                            let row_h = (32.0 * scale).round();
+                            let ws_count = self.workspace_mgr.workspaces.len();
+                            let list_h = (ws_count as f32 * row_h).max(32.0 * scale);
+                            let is_editing = matches!(self.workspace_modal.mode, WorkspaceModalMode::Renaming { .. } | WorkspaceModalMode::Creating { .. });
+                            let edit_h = if is_editing { (36.0 * scale).round() } else { 0.0 };
+                            let footer_h = (36.0 * scale).round();
+                            let modal_h = header_h + list_h + edit_h + footer_h + (16.0 * scale);
+
+                            let modal_x = ((width - modal_w) * 0.5).max(10.0);
+                            let modal_y = ((height - modal_h) * 0.5).max(10.0);
+
+                            // If clicked outside modal, close it
+                            if mx < modal_x || mx > modal_x + modal_w || my < modal_y || my > modal_y + modal_h {
+                                self.workspace_modal.is_open = false;
+                                self.workspace_modal.mode = WorkspaceModalMode::List;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // Close button on top right of header
+                            if my >= modal_y && my <= modal_y + header_h && mx >= modal_x + modal_w - (110.0 * scale) {
+                                self.workspace_modal.is_open = false;
+                                self.workspace_modal.mode = WorkspaceModalMode::List;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // Check list rows
+                            let list_top = modal_y + header_h + (8.0 * scale);
+                            if my >= list_top && my < list_top + list_h {
+                                let clicked_idx = ((my - list_top) / row_h).floor() as usize;
+                                if clicked_idx < ws_count {
+                                    if self.workspace_modal.selected_index == clicked_idx {
+                                        // Clicking selected row switches to it
+                                        let target_id = self.workspace_mgr.workspaces[clicked_idx].id.clone();
+                                        let _ = self.workspace_mgr.switch_workspace(&target_id);
+                                        if let Some(active_id) = self.active_tab_id() {
+                                            self.ensure_tab_session(&active_id);
+                                        }
+                                        self.save_workspace_state();
+                                        self.workspace_modal.is_open = false;
+                                    } else {
+                                        self.workspace_modal.selected_index = clicked_idx;
+                                    }
+                                    window.request_redraw();
+                                    return;
+                                }
+                            }
+
+                            // Check footer actions
+                            let footer_y = modal_y + modal_h - footer_h;
+                            if my >= footer_y && my <= footer_y + footer_h {
+                                // [n] New
+                                if mx >= modal_x + (10.0 * scale) && mx <= modal_x + (80.0 * scale) {
+                                    self.workspace_modal.mode = WorkspaceModalMode::Creating { input: String::new() };
+                                    window.request_redraw();
+                                    return;
+                                }
+                                // [r] Rename
+                                if mx >= modal_x + (85.0 * scale) && mx <= modal_x + (180.0 * scale) {
+                                    let idx = self.workspace_modal.selected_index;
+                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                        self.workspace_modal.mode = WorkspaceModalMode::Renaming { input: ws.name.clone() };
+                                    }
+                                    window.request_redraw();
+                                    return;
+                                }
+                                // [d] Delete
+                                if mx >= modal_x + (185.0 * scale) && mx <= modal_x + (260.0 * scale) {
+                                    if self.workspace_mgr.workspaces.len() > 1 {
+                                        let idx = self.workspace_modal.selected_index;
+                                        if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                            let target_id = ws.id.clone();
+                                            let _ = self.workspace_mgr.delete_workspace(&target_id);
+                                            self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
+                                            if let Some(active_id) = self.active_tab_id() {
+                                                self.ensure_tab_session(&active_id);
+                                            }
+                                            self.save_workspace_state();
+                                        }
+                                    }
+                                    window.request_redraw();
+                                    return;
+                                }
+                                // [w] Open in Window
+                                if mx >= modal_x + (265.0 * scale) && mx <= modal_x + (420.0 * scale) {
+                                    let idx = self.workspace_modal.selected_index;
+                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx)
+                                        && let Ok(exe) = std::env::current_exe()
+                                    {
+                                        let _ = std::process::Command::new(exe)
+                                            .arg("--workspace")
+                                            .arg(&ws.name)
+                                            .spawn();
+                                    }
+                                    self.workspace_modal.is_open = false;
+                                    window.request_redraw();
+                                    return;
+                                }
+                                // [Enter] Switch
+                                if mx >= modal_x + (425.0 * scale) {
+                                    let idx = self.workspace_modal.selected_index;
+                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                        let target_id = ws.id.clone();
+                                        let _ = self.workspace_mgr.switch_workspace(&target_id);
+                                        if let Some(active_id) = self.active_tab_id() {
+                                            self.ensure_tab_session(&active_id);
+                                        }
+                                        self.save_workspace_state();
+                                    }
+                                    self.workspace_modal.is_open = false;
+                                    window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    }
+
                     let raw_tabs = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.tabs.clone())
                         .unwrap_or_default();
@@ -555,8 +895,6 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         self.scale_factor,
                         self.renderer.cell_width,
                     );
-
-                    let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
 
                     // Check click in header
                     if my <= header.height {
@@ -596,6 +934,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
 
+                        // Check click on Workspace name badge
+                        let ws_name = self.workspace_mgr.get_active_workspace().map(|w| w.name.as_str()).unwrap_or("Default");
+                        let ws_w = ws_name.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
+                        let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
+                        let ws_x = (size.width as f32) - ws_w - (12.0 * self.scale_factor);
+                        let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
+                        let ws_rect = crate::window::tabs::Rect { x: ws_x, y: ws_y, width: ws_w, height: ws_h };
+
+                        if !clicked_tab && button == MouseButton::Left && ws_rect.contains(mx, my) {
+                            self.workspace_modal.is_open = true;
+                            self.workspace_modal.mode = WorkspaceModalMode::List;
+                            if let Some(pos) = self.workspace_mgr.workspaces.iter().position(|w| w.id == self.workspace_mgr.active_workspace_id) {
+                                self.workspace_modal.selected_index = pos;
+                            }
+                            window.request_redraw();
+                            return;
+                        }
+
                         if !clicked_tab && button == MouseButton::Left && header.add_button_rect.contains(mx, my) {
                             let cwd = self.get_active_tab_cwd();
                             if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
@@ -619,6 +975,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 ..
             } => {
                 let window = self.window.clone();
+
+                if self.workspace_modal.is_open {
+                    self.handle_modal_key(&logical_key, match physical_key {
+                        PhysicalKey::Code(c) => Some(c),
+                        _ => None,
+                    });
+                    if let Some(ref win) = window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 let mods = Modifiers {
                     alt: self.modifiers.alt_key(),
                     ctrl: self.modifiers.control_key(),
@@ -706,6 +1074,19 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     win.request_redraw();
                                 }
                             }
+                        }
+                        KeyAction::ToggleWorkspaceModal => {
+                            self.workspace_modal.is_open = !self.workspace_modal.is_open;
+                            self.workspace_modal.mode = WorkspaceModalMode::List;
+                            if let Some(pos) = self.workspace_mgr.workspaces.iter().position(|w| w.id == self.workspace_mgr.active_workspace_id) {
+                                self.workspace_modal.selected_index = pos;
+                            }
+                            if let Some(ref win) = window {
+                                win.request_redraw();
+                            }
+                        }
+                        KeyAction::ReloadConfig => {
+                            self.reload_config();
                         }
                         KeyAction::SelectTab(idx) => {
                             if let Ok(tab_id) = self.workspace_mgr.select_tab_by_1_index(idx) {
@@ -900,17 +1281,31 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             0x0016161E,
                         );
 
-                        // Draw Workspace Indicator badge on the right
-                        let ws_label = format!("[WS: {}]", active_ws_name);
-                        let ws_x = (width as f32) - (ws_label.len() as f32 * self.renderer.cell_width) - (16.0 * self.scale_factor);
-                        let ws_y = ((header.height - self.renderer.cell_height) * 0.5).max(0.0);
+                        // Draw Workspace Indicator badge on the right (clean name without [WS: ])
+                        let ws_label = active_ws_name.to_string();
+                        let ws_w = ws_label.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
+                        let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
+                        let ws_x = (width as f32) - ws_w - (12.0 * self.scale_factor);
+                        let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
                         if ws_x > header.add_button_rect.x + (30.0 * self.scale_factor) {
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                ws_x as usize,
+                                ws_y as usize,
+                                ws_w as usize,
+                                ws_h as usize,
+                                0x001F2335,
+                            );
+                            let text_x = ws_x + (8.0 * self.scale_factor);
+                            let text_y = ws_y + ((ws_h - self.renderer.cell_height) * 0.5).max(0.0);
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
-                                ws_x,
-                                ws_y,
+                                text_x,
+                                text_y,
                                 &ws_label,
                                 0x007AA2F7,
                             );
@@ -1228,6 +1623,199 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                     }
 
+                    // 4. Render Workspace Management Modal if open
+                    if self.workspace_modal.is_open {
+                        // Dim backdrop (50% opacity blend)
+                        for pixel in buffer.iter_mut() {
+                            let p = *pixel;
+                            let r = ((p >> 16) & 0xFF) / 3;
+                            let g = ((p >> 8) & 0xFF) / 3;
+                            let b = (p & 0xFF) / 3;
+                            *pixel = (r << 16) | (g << 8) | b;
+                        }
+
+                        let scale = self.scale_factor;
+                        let modal_w = (520.0 * scale).min(width as f32 - 40.0);
+                        let header_h = (36.0 * scale).round();
+                        let row_h = (32.0 * scale).round();
+                        let ws_count = self.workspace_mgr.workspaces.len();
+                        let list_h = (ws_count as f32 * row_h).max(32.0 * scale);
+                        let is_editing = matches!(self.workspace_modal.mode, WorkspaceModalMode::Renaming { .. } | WorkspaceModalMode::Creating { .. });
+                        let edit_h = if is_editing { (36.0 * scale).round() } else { 0.0 };
+                        let footer_h = (36.0 * scale).round();
+                        let modal_h = header_h + list_h + edit_h + footer_h + (16.0 * scale);
+
+                        let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
+                        let modal_y = ((height as f32 - modal_h) * 0.5).max(10.0);
+
+                        // Modal background (#1A1B26)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            modal_h as usize,
+                            0x001A1B26,
+                        );
+
+                        // Modal border (#3B4261, 1px)
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+
+                        // Header strip (#24283B)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            header_h as usize,
+                            0x0024283B,
+                        );
+                        let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + (16.0 * scale),
+                            head_text_y,
+                            "Workspaces",
+                            0x00C0CAF5,
+                        );
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + modal_w - (100.0 * scale),
+                            head_text_y,
+                            "[Esc] Close",
+                            0x00787C99,
+                        );
+
+                        // Workspace list rows
+                        let list_top = modal_y + header_h + (8.0 * scale);
+                        for (idx, ws) in self.workspace_mgr.workspaces.iter().enumerate() {
+                            let row_y = list_top + (idx as f32 * row_h);
+                            let is_selected = idx == self.workspace_modal.selected_index;
+                            let is_current = ws.id == self.workspace_mgr.active_workspace_id;
+                            let row_bg = if is_selected { 0x00283457 } else { 0x001A1B26 };
+
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                (modal_x + (8.0 * scale)) as usize,
+                                row_y as usize,
+                                (modal_w - (16.0 * scale)) as usize,
+                                row_h as usize,
+                                row_bg,
+                            );
+
+                            let text_y = row_y + ((row_h - self.renderer.cell_height) * 0.5).max(0.0);
+                            let num_str = format!("{}. ", idx + 1);
+                            self.renderer.draw_text(&mut buffer, width, height, modal_x + (16.0 * scale), text_y, &num_str, 0x00565F89);
+
+                            let name_x = modal_x + (40.0 * scale);
+                            let name_fg = if is_selected { 0x007AA2F7 } else { 0x00C0CAF5 };
+                            self.renderer.draw_text(&mut buffer, width, height, name_x, text_y, &ws.name, name_fg);
+
+                            let tab_info = format!("({} tab{})", ws.tabs.len(), if ws.tabs.len() > 1 { "s" } else { "" });
+                            let info_x = name_x + (ws.name.len() as f32 * self.renderer.cell_width) + (10.0 * scale);
+                            self.renderer.draw_text(&mut buffer, width, height, info_x, text_y, &tab_info, 0x00565F89);
+
+                            if is_current {
+                                let cur_x = modal_x + modal_w - (80.0 * scale);
+                                self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● Active", 0x009ECE6A);
+                            }
+                        }
+
+                        // Inline text editing (Renaming / Creating)
+                        if is_editing {
+                            let edit_y = list_top + list_h + (4.0 * scale);
+                            let (prompt, input_str) = match &self.workspace_modal.mode {
+                                WorkspaceModalMode::Renaming { input } => ("Rename to: ", input.as_str()),
+                                WorkspaceModalMode::Creating { input } => ("New workspace: ", input.as_str()),
+                                WorkspaceModalMode::List => ("", ""),
+                            };
+
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                modal_x + (16.0 * scale),
+                                edit_y,
+                                prompt,
+                                0x00BB9AF7,
+                            );
+
+                            let prompt_w = prompt.len() as f32 * self.renderer.cell_width;
+                            let input_x = modal_x + (16.0 * scale) + prompt_w;
+                            let input_w = ((input_str.len() + 3) as f32 * self.renderer.cell_width).max(120.0 * scale);
+                            let input_h = (self.renderer.cell_height + 4.0 * scale).round();
+
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                input_x as usize,
+                                edit_y as usize,
+                                input_w as usize,
+                                input_h as usize,
+                                0x0016161E,
+                            );
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (input_x as usize, edit_y as usize, input_w as usize, input_h as usize),
+                                1,
+                                0x007AA2F7,
+                            );
+
+                            let input_text = format!("{}_", input_str);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                input_x + (4.0 * scale),
+                                edit_y + (2.0 * scale),
+                                &input_text,
+                                0x007AA2F7,
+                            );
+                        }
+
+                        // Footer toolbar
+                        let footer_y = modal_y + modal_h - footer_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            footer_y as usize,
+                            modal_w as usize,
+                            footer_h as usize,
+                            0x001F2335,
+                        );
+
+                        let footer_text_y = footer_y + ((footer_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + (16.0 * scale),
+                            footer_text_y,
+                            "[n] New   [r] Rename   [d] Delete   [w] Open in Window   [Enter] Switch",
+                            0x007AA2F7,
+                        );
+                    }
+
                     let _ = buffer.present();
 
                     #[cfg(target_os = "macos")]
@@ -1341,3 +1929,19 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
 fn get_ime_commit_extra() -> Option<Vec<u8>> {
     None
 }
+
+fn draw_outline_rect(
+    buffer: &mut [u32],
+    screen_size: (usize, usize),
+    rect: (usize, usize, usize, usize),
+    border_width: usize,
+    color: u32,
+) {
+    let (width, height) = screen_size;
+    let (x, y, w, h) = rect;
+    TextRenderer::draw_rect(buffer, width, height, x, y, w, border_width, color);
+    TextRenderer::draw_rect(buffer, width, height, x, y + h.saturating_sub(border_width), w, border_width, color);
+    TextRenderer::draw_rect(buffer, width, height, x, y, border_width, h, color);
+    TextRenderer::draw_rect(buffer, width, height, x + w.saturating_sub(border_width), y, border_width, h, color);
+}
+

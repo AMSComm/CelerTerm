@@ -21,6 +21,8 @@ pub enum KeyAction {
     NewWorkspace,
     PreviousWorkspace,
     NextWorkspace,
+    ToggleWorkspaceModal,
+    ReloadConfig,
     Paste,
     Copy,
     ClearScreen,
@@ -39,7 +41,7 @@ pub fn translate_key_event(
     mods: Modifiers,
     option_as_alt: bool,
 ) -> Option<KeyAction> {
-    // 0. Command (Logo) shortcuts for Tab and Workspace management
+    // 0. Command (Logo) or Ctrl+Shift shortcuts for Tab and Workspace management
     if mods.logo && !mods.ctrl && !mods.alt {
         if mods.shift {
             if let Key::Character(ch) = key {
@@ -47,6 +49,8 @@ pub fn translate_key_event(
                     "N" | "n" => return Some(KeyAction::NewWorkspace),
                     "{" | "[" => return Some(KeyAction::PreviousWorkspace),
                     "}" | "]" => return Some(KeyAction::NextWorkspace),
+                    "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
+                    "R" | "r" => return Some(KeyAction::ReloadConfig),
                     _ => {}
                 }
             }
@@ -79,6 +83,18 @@ pub fn translate_key_event(
                     _ => {}
                 }
             }
+        }
+    }
+
+    // 0.1 Control + Shift combinations (cross-platform shortcuts)
+    if mods.ctrl && mods.shift && !mods.alt && !mods.logo
+        && let Key::Character(ch) = key
+    {
+        match ch.as_str() {
+            "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
+            "R" | "r" => return Some(KeyAction::ReloadConfig),
+            "N" | "n" => return Some(KeyAction::NewWorkspace),
+            _ => {}
         }
     }
 

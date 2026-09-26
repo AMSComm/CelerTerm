@@ -212,4 +212,39 @@ impl WorkspaceManager {
         self.active_workspace_id = id.clone();
         Ok(id)
     }
+
+    pub fn rename_workspace(&mut self, workspace_id: &str, new_name: &str) -> Result<(), String> {
+        let trimmed = new_name.trim();
+        if trimmed.is_empty() {
+            return Err("Workspace name cannot be empty".to_string());
+        }
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
+            ws.name = trimmed.to_string();
+            Ok(())
+        } else {
+            Err("Workspace not found".to_string())
+        }
+    }
+
+    pub fn delete_workspace(&mut self, workspace_id: &str) -> Result<String, String> {
+        if self.workspaces.len() <= 1 {
+            return Err("Cannot delete the only remaining workspace".to_string());
+        }
+
+        if let Some(pos) = self.workspaces.iter().position(|w| w.id == workspace_id) {
+            self.workspaces.remove(pos);
+            if self.active_workspace_id == workspace_id {
+                let new_idx = if pos >= self.workspaces.len() {
+                    self.workspaces.len() - 1
+                } else {
+                    pos
+                };
+                self.active_workspace_id = self.workspaces[new_idx].id.clone();
+            }
+            Ok(self.active_workspace_id.clone())
+        } else {
+            Err("Workspace not found".to_string())
+        }
+    }
 }
+

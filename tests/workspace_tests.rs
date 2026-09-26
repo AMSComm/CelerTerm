@@ -317,3 +317,43 @@ fn test_pty_sink_forwards_dsr_cursor_report() {
     assert!(written.contains("\x1b[4;1R"), "PtySink should reply with cursor position at line 4, col 1");
 }
 
+#[test]
+fn test_workspace_delete_and_rename() {
+    let mut manager = WorkspaceManager::new();
+    let default_id = manager.active_workspace_id.clone();
+
+    // 1. Rename existing default workspace
+    manager.rename_workspace(&default_id, "Dev Space").expect("Rename succeeded");
+    assert_eq!(manager.get_active_workspace().unwrap().name, "Dev Space");
+
+    // Renaming with empty name should fail
+    assert!(manager.rename_workspace(&default_id, "   ").is_err());
+
+    // 2. Add second and third workspaces
+    let ws2_id = manager.new_workspace("Project 2").unwrap();
+    let ws3_id = manager.new_workspace("Project 3").unwrap();
+    assert_eq!(manager.workspaces.len(), 3);
+    assert_eq!(manager.active_workspace_id, ws3_id);
+
+    // 3. Rename ws2
+    manager.rename_workspace(&ws2_id, "Backend API").unwrap();
+    assert_eq!(manager.workspaces.iter().find(|w| w.id == ws2_id).unwrap().name, "Backend API");
+
+    // 4. Delete non-active workspace (ws2)
+    manager.delete_workspace(&ws2_id).expect("Delete ws2 succeeded");
+    assert_eq!(manager.workspaces.len(), 2);
+    assert!(!manager.workspaces.iter().any(|w| w.id == ws2_id));
+    assert_eq!(manager.active_workspace_id, ws3_id);
+
+    // 5. Delete currently active workspace (ws3)
+    let new_active = manager.delete_workspace(&ws3_id).expect("Delete ws3 succeeded");
+    assert_eq!(manager.workspaces.len(), 1);
+    assert_eq!(new_active, default_id);
+    assert_eq!(manager.active_workspace_id, default_id);
+
+    // 6. Attempting to delete the last remaining workspace must fail
+    assert!(manager.delete_workspace(&default_id).is_err());
+    assert_eq!(manager.workspaces.len(), 1);
+}
+
+

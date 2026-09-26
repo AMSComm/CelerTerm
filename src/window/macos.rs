@@ -58,3 +58,31 @@ pub fn apply_traffic_lights_visibility(window: &winit::window::Window, hide_traf
         }
     }
 }
+
+#[cfg(target_os = "macos")]
+pub fn set_macos_app_icon(png_bytes: &[u8]) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        unsafe {
+            let app = NSApplication::sharedApplication(mtm);
+            if let (Some(nsdata_cls), Some(nsimage_cls)) = (AnyClass::get("NSData"), AnyClass::get("NSImage")) {
+                let data: *mut AnyObject = msg_send![nsdata_cls, dataWithBytes: png_bytes.as_ptr(), length: png_bytes.len()];
+                if !data.is_null() {
+                    let img_alloc: *mut AnyObject = msg_send![nsimage_cls, alloc];
+                    let img: *mut AnyObject = msg_send![img_alloc, initWithData: data];
+                    if !img.is_null() {
+                        let () = msg_send![&*app, setApplicationIconImage: img];
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_macos_app_icon(_png_bytes: &[u8]) {}
+

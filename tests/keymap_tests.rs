@@ -285,3 +285,54 @@ fn test_vietnamese_ime_commit_decision_logic() {
     let result_normal = process_ime_commit(false, "abc", Some(b" "));
     assert_eq!(String::from_utf8(result_normal).unwrap(), "abc");
 }
+
+#[test]
+fn test_workspace_modal_and_reload_config_shortcuts() {
+    let cmd_shift = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        logo: true,
+    };
+
+    // Cmd+Shift+P / Cmd+Shift+O -> ToggleWorkspaceModal
+    assert_eq!(
+        translate_key(&Key::Character("P".into()), cmd_shift, true),
+        Some(KeyAction::ToggleWorkspaceModal)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("p".into()), cmd_shift, true),
+        Some(KeyAction::ToggleWorkspaceModal)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("O".into()), cmd_shift, true),
+        Some(KeyAction::ToggleWorkspaceModal)
+    );
+
+    // Cmd+Shift+R -> ReloadConfig
+    assert_eq!(
+        translate_key(&Key::Character("R".into()), cmd_shift, true),
+        Some(KeyAction::ReloadConfig)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("r".into()), cmd_shift, true),
+        Some(KeyAction::ReloadConfig)
+    );
+
+    // Linux/Cross-platform: Ctrl+Shift+P / Ctrl+Shift+R
+    let ctrl_shift = Modifiers {
+        alt: false,
+        ctrl: true,
+        shift: true,
+        logo: false,
+    };
+    assert_eq!(
+        translate_key(&Key::Character("P".into()), ctrl_shift, true),
+        Some(KeyAction::ToggleWorkspaceModal)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("R".into()), ctrl_shift, true),
+        Some(KeyAction::ReloadConfig)
+    );
+}
+
