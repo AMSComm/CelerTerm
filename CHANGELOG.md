@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-09-26
+
+### Added
+
+- **Interactive Mouse Text Selection & Copy**:
+  - Click-and-drag selection (`SelectionType::Simple`), double-click word selection (`SelectionType::Semantic`), triple-click line selection (`SelectionType::Lines`), and Option+drag rectangular block selection (`SelectionType::Block`).
+  - Automatic viewport scrolling when dragging past top/bottom screen boundaries.
+  - Theme selection highlight rendering (Pass 1 background fill).
+  - Native clipboard copy via `Cmd+C` on macOS / `Ctrl+Shift+C` on Linux, and paste via `Cmd+V` / `Ctrl+Shift+V`.
+- **macOS Option Word Navigation & Deletion**:
+  - Configurable Option+Left arrow (`\x1bb`) and Option+Right arrow (`\x1bf`) word navigation in terminal shells.
+  - Option+Delete (`\x17` / `Ctrl+W`) word deletion support.
+- **TDD Test Suite Expansion**:
+  - Comprehensive unit test coverage for text selection lifecycle, word boundaries, line selection, color parsing, and word navigation keymaps (68/68 tests passing).
+
+### Fixed
+
+- **Multi-Workspace Persistence & Session Activation**:
+  - Fixed workspace snapshot overwrite race condition across multiple open windows by merging memory state with disk state before saving.
+  - Automatically activate all workspace tabs upon restore so secondary workspaces retain full state across app restarts.
+
 ## [0.2.1] - 2026-09-26
 
 ### Added
