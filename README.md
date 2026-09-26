@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/AMSComm/CelerTerm/releases"><img src="https://img.shields.io/badge/Release-v0.2.0-396cd8?style=flat-square" alt="Version 0.2.0" /></a>
+  <a href="https://github.com/AMSComm/CelerTerm/releases"><img src="https://img.shields.io/badge/Release-v0.2.1-396cd8?style=flat-square" alt="Version 0.2.1" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="License MIT" /></a>
   <img src="https://img.shields.io/badge/Engine-Pure_Rust_2024-orange?style=flat-square&logo=rust" alt="Rust 2024" />
   <img src="https://img.shields.io/badge/Rendering-WGPU_%2B_Softbuffer-7aa2f7?style=flat-square" alt="Rendering" />

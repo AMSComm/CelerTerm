@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-09-26
+
+### Added
+
+- **In-App Auto-Update & Atomic Relaunch**:
+  - Direct download and staging of GitHub release packages within the terminal application (`CelerTerm-macOS.app.zip` for macOS, `celerterm-linux-x86_64.tar.gz` for Linux).
+  - Background asynchronous downloading via curl thread, preventing any terminal frame drops or lag.
+  - Interactive 3-stage update modal: `[Enter] Update Now` -> `[...] Downloading` -> `[Enter] Restart & Update`.
+  - Atomic relaunch script preserving open workspace state and smoothly replacing application binaries.
+- **TDD Test Suite Expansion**:
+  - Added unit and platform-matching tests for GitHub release asset filters and dynamic update modal states (56/56 tests passing).
+
 ## [0.2.0] - 2026-09-26
 
 ### Added
