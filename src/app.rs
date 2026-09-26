@@ -7,7 +7,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{ModifiersState, PhysicalKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 use crate::config::load_config;
 use crate::window::macos::configure_macos_window;
 #[cfg(target_os = "macos")]
@@ -16,7 +16,9 @@ use crate::window::tabs::calculate_header_layout;
 use crate::workspace::WorkspaceManager;
 use crate::pty::PtySession;
 use crate::term::{TermScreen, translate_key_event, Modifiers, KeyAction};
-use crate::renderer::{TextRenderer, resolve_color};
+use crate::renderer::{TextRenderer, parse_hex_color, resolve_color};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::SelectionType;
 use parking_lot::Mutex;
 use log::info;
 
@@ -118,6 +120,9 @@ pub struct CelerApp {
     modifiers: ModifiersState,
     proxy: Option<EventLoopProxy<UserEvent>>,
     mouse_pos: (f64, f64),
+    is_selecting: bool,
+    last_click: Option<(std::time::Instant, Point)>,
+    click_count: usize,
     ime_preedit: Option<(String, Option<(usize, usize)>)>,
     last_preedit: Option<(String, std::time::Instant)>,
     scale_factor: f32,
@@ -201,6 +206,9 @@ impl CelerApp {
             modifiers: ModifiersState::default(),
             proxy: None,
             mouse_pos: (0.0, 0.0),
+            is_selecting: false,
+            last_click: None,
+            click_count: 0,
             ime_preedit: None,
             last_preedit: None,
             scale_factor: 1.0,
@@ -874,9 +882,69 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     window.set_ime_allowed(!self.modifiers.alt_key());
                 }
             }
+            WindowEvent::Focused(false) => {
+                self.is_selecting = false;
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
-                if (self.workspace_modal.is_open || self.update_modal.is_open || self.app_menu_open)
+
+                let header_h = if self.config.window.tabs_in_titlebar {
+                    (26.0 * self.scale_factor.max(1.0)).round()
+                } else {
+                    0.0
+                };
+
+                if let Some(ref win) = self.window {
+                    if self.workspace_modal.is_open || self.update_modal.is_open || self.app_menu_open {
+                        win.set_cursor(CursorIcon::Default);
+                    } else if (position.y as f32) > header_h {
+                        win.set_cursor(CursorIcon::Text);
+                    } else {
+                        win.set_cursor(CursorIcon::Default);
+                    }
+                }
+
+                if self.is_selecting
+                    && let Some(active_id) = self.active_tab_id()
+                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                {
+                    let cell_w = self.renderer.cell_width;
+                    let cell_h = self.renderer.cell_height;
+                    let cols = session.screen.size.columns;
+                    let lines = session.screen.size.lines;
+
+                    if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
+                        let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                        let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                        let start_y = header_h + pad_y;
+
+                        let mx = self.mouse_pos.0 as f32;
+                        let my = self.mouse_pos.1 as f32;
+
+                        if my < start_y {
+                            session.screen.scroll_display(1);
+                        } else if my > start_y + (lines as f32 * cell_h) {
+                            session.screen.scroll_display(-1);
+                        }
+
+                        let c = (((mx - pad_x) / cell_w).floor() as i32).clamp(0, cols as i32 - 1) as usize;
+                        let l = (((my - start_y) / cell_h).floor() as i32).clamp(0, lines as i32 - 1) as usize;
+                        let side = if (mx - pad_x) - (c as f32 * cell_w) < cell_w * 0.5 {
+                            Side::Left
+                        } else {
+                            Side::Right
+                        };
+
+                        let display_offset = session.screen.display_offset();
+                        let grid_line = Line(l as i32 - display_offset as i32);
+                        let point = Point::new(grid_line, Column(c));
+
+                        session.screen.update_selection(point, side);
+                        if let Some(ref win) = self.window {
+                            win.request_redraw();
+                        }
+                    }
+                } else if (self.workspace_modal.is_open || self.update_modal.is_open || self.app_menu_open)
                     && let Some(ref win) = self.window
                 {
                     win.request_redraw();
@@ -988,7 +1056,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::MouseInput {
-                state: ElementState::Pressed,
+                state,
                 button,
                 ..
             } => {
@@ -997,7 +1065,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let size = window.inner_size();
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
 
-                    if self.update_modal.is_open {
+                    if state == ElementState::Pressed {
+                        if self.update_modal.is_open {
                         if button == MouseButton::Left {
                             let (width, height) = (size.width as f32, size.height as f32);
                             let scale = self.scale_factor;
@@ -1361,8 +1430,114 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let _ = window.drag_window();
                         }
                     }
+
+                    // Check click in terminal area
+                    if my > header.height && button == MouseButton::Left {
+                        let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                        let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                        let start_y = header.height + pad_y;
+                        let cell_w = self.renderer.cell_width;
+                        let cell_h = self.renderer.cell_height;
+
+                        if cell_w > 0.0 && cell_h > 0.0
+                            && let Some(active_id) = self.active_tab_id()
+                            && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                        {
+                            let cols = session.screen.size.columns;
+                            let lines = session.screen.size.lines;
+
+                            if cols > 0 && lines > 0 {
+                                if session.screen.is_mouse_mode() && !self.modifiers.shift_key() {
+                                    let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32);
+                                    let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32);
+                                    let _ = session.write_all(format!("\x1b[<0;{};{}M", col, row).as_bytes());
+                                    let _ = session.flush();
+                                } else {
+                                    let c = (((mx - pad_x) / cell_w).floor() as i32).clamp(0, cols as i32 - 1) as usize;
+                                    let l = (((my - start_y) / cell_h).floor() as i32).clamp(0, lines as i32 - 1) as usize;
+                                    let side = if (mx - pad_x) - (c as f32 * cell_w) < cell_w * 0.5 {
+                                        Side::Left
+                                    } else {
+                                        Side::Right
+                                    };
+
+                                    let display_offset = session.screen.display_offset();
+                                    let grid_line = Line(l as i32 - display_offset as i32);
+                                    let point = Point::new(grid_line, Column(c));
+
+                                    let now = std::time::Instant::now();
+                                    let is_multi_click = self.last_click
+                                        .map(|(t, last_pt)| {
+                                            now.duration_since(t).as_millis() < 400
+                                                && (last_pt.line.0 - point.line.0).abs() <= 1
+                                                && (last_pt.column.0 as i32 - point.column.0 as i32).abs() <= 2
+                                        })
+                                        .unwrap_or(false);
+
+                                    if is_multi_click {
+                                        self.click_count = (self.click_count % 3) + 1;
+                                    } else {
+                                        self.click_count = 1;
+                                    }
+                                    self.last_click = Some((now, point));
+
+                                    let sel_type = if self.modifiers.alt_key() {
+                                        SelectionType::Block
+                                    } else {
+                                        match self.click_count {
+                                            2 => SelectionType::Semantic,
+                                            3 => SelectionType::Lines,
+                                            _ => SelectionType::Simple,
+                                        }
+                                    };
+
+                                    session.screen.start_selection(sel_type, point, side);
+                                    self.is_selecting = true;
+                                    window.request_redraw();
+                                }
+                            }
+                        }
+                    }
+                } else if state == ElementState::Released && button == MouseButton::Left {
+                if self.is_selecting {
+                    self.is_selecting = false;
+                    if let Some(active_id) = self.active_tab_id()
+                        && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                    {
+                        if let Some(ref sel) = session.screen.term.selection {
+                            if sel.is_empty() {
+                                session.screen.clear_selection();
+                            }
+                        }
+                    }
+                    window.request_redraw();
+                } else if let Some(active_id) = self.active_tab_id()
+                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                    && session.screen.is_mouse_mode()
+                    && !self.modifiers.shift_key()
+                {
+                    let header_h = if self.config.window.tabs_in_titlebar {
+                        (26.0 * self.scale_factor.max(1.0)).round()
+                    } else {
+                        0.0
+                    };
+                    let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                    let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                    let start_y = header_h + pad_y;
+                    let cell_w = self.renderer.cell_width;
+                    let cell_h = self.renderer.cell_height;
+                    let cols = session.screen.size.columns;
+                    let lines = session.screen.size.lines;
+                    if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
+                        let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32);
+                        let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32);
+                        let _ = session.write_all(format!("\x1b[<0;{};{}m", col, row).as_bytes());
+                        let _ = session.flush();
+                    }
                 }
             }
+        }
+    }
             WindowEvent::KeyboardInput {
                 event: KeyEvent {
                     logical_key,
@@ -1573,7 +1748,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                         KeyAction::Copy => {
-                            // Copy shortcut recognized; ready for text selection integration
+                            if let Some(active_id) = self.active_tab_id()
+                                && let Some(session) = self.tab_sessions.get(&active_id)
+                                && let Some(text) = session.screen.copy_selection_text()
+                                && !text.is_empty()
+                            {
+                                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                    let _ = clipboard.set_text(text);
+                                }
+                            }
                         }
                         KeyAction::ClearScreen => {
                             if let Some(active_id) = self.active_tab_id()
@@ -1877,6 +2060,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let lines = active_session.screen.size.lines;
                         let default_fg = 0x00C0CAF5;
                         let default_bg = 0x001A1B26;
+                        let selection_range = active_session.screen.selection_range();
+                        let selection_bg_u32 = parse_hex_color(&self.config.colors.selection_background, 0x0033467c);
+                        let display_offset = active_session.screen.display_offset();
 
                         // Pass 1: Draw all cell backgrounds across lines
                         for line_idx in 0..lines {
@@ -1884,10 +2070,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if y + cell_h > height as f32 {
                                 break;
                             }
+                            let grid_line = Line(line_idx as i32 - display_offset as i32);
                             for col in 0..cols {
-                                let (_c, _fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
-                                let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
-                                if bg_u32 != default_bg {
+                                let point = Point::new(grid_line, Column(col));
+                                let is_selected = selection_range.as_ref().map(|sr| sr.contains(point)).unwrap_or(false);
+
+                                if is_selected {
                                     TextRenderer::draw_rect(
                                         &mut buffer,
                                         width,
@@ -1896,8 +2084,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         y as usize,
                                         cell_w.ceil() as usize,
                                         cell_h.ceil() as usize,
-                                        bg_u32,
+                                        selection_bg_u32,
                                     );
+                                } else {
+                                    let (_c, _fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
+                                    let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
+                                    if bg_u32 != default_bg {
+                                        TextRenderer::draw_rect(
+                                            &mut buffer,
+                                            width,
+                                            height,
+                                            (pad_x + (col as f32) * cell_w) as usize,
+                                            y as usize,
+                                            cell_w.ceil() as usize,
+                                            cell_h.ceil() as usize,
+                                            bg_u32,
+                                        );
+                                    }
                                 }
                             }
                         }

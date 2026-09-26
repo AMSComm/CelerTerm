@@ -1,5 +1,10 @@
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 
+pub fn parse_hex_color(hex: &str, default: u32) -> u32 {
+    let trimmed = hex.trim().trim_start_matches('#');
+    u32::from_str_radix(trimmed, 16).unwrap_or(default)
+}
+
 pub fn resolve_color(color: Color, default_fg: u32, default_bg: u32) -> u32 {
     match color {
         Color::Spec(rgb) => {

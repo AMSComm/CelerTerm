@@ -100,6 +100,8 @@ pub fn translate_key_event(
                 "R" | "r" => return Some(KeyAction::ReloadConfig),
                 "N" | "n" => return Some(KeyAction::NewWorkspace),
                 "U" | "u" => return Some(KeyAction::CheckForUpdates),
+                "C" | "c" => return Some(KeyAction::Copy),
+                "V" | "v" => return Some(KeyAction::Paste),
                 _ => {}
             }
         }

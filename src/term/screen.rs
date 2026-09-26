@@ -5,7 +5,8 @@ use parking_lot::Mutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, GridCell, Row};
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
@@ -126,6 +127,43 @@ impl TermScreen {
 
     pub fn is_sgr_mouse(&self) -> bool {
         self.term.mode().contains(alacritty_terminal::term::TermMode::SGR_MOUSE)
+    }
+
+    pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
+        self.term.selection = Some(Selection::new(ty, point, side));
+        self.dirty = true;
+    }
+
+    pub fn update_selection(&mut self, point: Point, side: Side) {
+        if let Some(ref mut sel) = self.term.selection {
+            sel.update(point, side);
+            self.dirty = true;
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        if self.term.selection.is_some() {
+            self.term.selection = None;
+            self.dirty = true;
+        }
+    }
+
+    pub fn selection_range(&self) -> Option<SelectionRange> {
+        self.term.selection.as_ref().and_then(|s| s.to_range(&self.term))
+    }
+
+    pub fn copy_selection_text(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    pub fn is_point_selected(&self, col: usize, line: usize) -> bool {
+        if let Some(range) = self.selection_range() {
+            let grid = self.term.grid();
+            let display_line = Line(line as i32 - grid.display_offset() as i32);
+            range.contains(Point::new(display_line, Column(col)))
+        } else {
+            false
+        }
     }
 
     pub fn get_cell_char(&self, col: usize, line: usize) -> char {
