@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.4] - 2026-09-27
+
+### Added
+
+- **SSH Remote Process Dynamic Title Indicator (`[🌐command]`)**:
+  - Automatically captures ANSI OSC 0/2 window title escape sequences (`Event::Title` / `Event::ResetTitle`) emitted by remote shells (bash, zsh) and active commands (`tail`, `nvim`, `top`, `htop`, etc.) over SSH connections.
+  - Displays a dedicated globe indicator on the tab title (e.g. `[🌐tail]`, `[🌐nvim]`, `[🌐~]`, or `[🌐ssh]`), making remote terminal sessions instantly identifiable at a glance.
+  - Automatically resets dynamic titles and cleanly restores local folder names upon SSH exit (`exit`).
 
 ### Fixed
 
