@@ -82,3 +82,49 @@ fn test_renderable_content_and_scroll() {
     screen.scroll_display(-5);
     assert_eq!(screen.display_offset(), 0);
 }
+
+#[test]
+fn test_get_bootstrapped_path() {
+    let path = celerterm::pty::get_bootstrapped_path();
+    assert!(!path.is_empty());
+    #[cfg(target_os = "macos")]
+    if std::path::Path::new("/opt/homebrew/bin").exists() {
+        assert!(path.contains("/opt/homebrew/bin"));
+    }
+}
+
+#[test]
+fn test_pty_login_shell_and_path_bootstrap() {
+    let mut pty = PtySession::spawn(80, 24, None).expect("Pty spawn succeeds");
+    let mut screen = TermScreen::new(80, 24);
+
+    pty.write_all(b"echo PATH_RESULT=$PATH\n").expect("Write to pty succeeds");
+
+    let mut buf = [0u8; 1024];
+    let start = Instant::now();
+    let timeout = Duration::from_secs(3);
+    let mut output = String::new();
+
+    while start.elapsed() < timeout {
+        match pty.reader.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                screen.process_bytes(&buf[..n]);
+                let text = screen.get_screen_text().join(" ");
+                if text.contains("PATH_RESULT=/") {
+                    output = text;
+                    break;
+                }
+            }
+            Ok(_) => break,
+            Err(_) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    assert!(output.contains("PATH_RESULT=/"), "PTY output should have executed command with expanded PATH");
+    #[cfg(target_os = "macos")]
+    if std::path::Path::new("/opt/homebrew/bin").exists() {
+        assert!(output.contains("/opt/homebrew/bin"), "Spawned login shell must have /opt/homebrew/bin in PATH");
+    }
+}

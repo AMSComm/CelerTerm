@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `NSLocalNetworkUsageDescription` key to `assets/Info.plist` describing local network permissions for SSH, dev servers, and local tooling.
   - Added ad-hoc bundle code signing (`codesign --force --deep -s -`) to the macOS packaging CI/CD pipeline to ensure persistent TCC privacy database authorization.
 
+### Fixed
+
+- **Login Shell & PATH Environment Bootstrapping (Neovim / Homebrew fix)**:
+  - Spawns terminal shells as login shells (`-l`), ensuring shell profile files (`~/.zprofile`, `~/.zshrc`, `~/.bash_profile`) are properly evaluated so Homebrew (`/opt/homebrew/bin`), cargo, and user PATH configurations load completely.
+  - Added automatic PATH bootstrapping for GUI-launched app instances, prepending existing system paths (`/opt/homebrew/bin`, `/opt/homebrew/sbin`, `/usr/local/bin`, `~/.cargo/bin`, `~/.local/bin`) if not already present.
+  - Guarantees CLI tools like `nvim` (Neovim), `git`, `node`, `bun`, and `cargo` work identically on fresh starts, session restores, and app relaunches.
+  - Added unit test coverage for PATH bootstrapping and login shell environment (71/71 tests passing).
+
 ## [0.2.2] - 2026-09-26
 
 ### Added

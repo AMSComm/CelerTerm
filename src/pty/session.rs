@@ -23,10 +23,17 @@ impl PtySession {
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
         let mut cmd = CommandBuilder::new(&shell);
+        #[cfg(unix)]
+        cmd.arg("-l");
+
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "CelerTerm");
         cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+
+        let bootstrapped_path = get_bootstrapped_path();
+        cmd.env("PATH", &bootstrapped_path);
+
         if let Some(dir) = cwd
             && dir.exists()
         {
@@ -77,3 +84,53 @@ impl PtySession {
         }
     }
 }
+
+pub fn get_bootstrapped_path() -> String {
+    let current_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".to_string());
+    let paths: Vec<String> = current_path.split(':').map(|s| s.to_string()).collect();
+
+    let mut candidate_dirs: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        candidate_dirs.push(std::path::PathBuf::from("/opt/homebrew/bin"));
+        candidate_dirs.push(std::path::PathBuf::from("/opt/homebrew/sbin"));
+        candidate_dirs.push(std::path::PathBuf::from("/usr/local/bin"));
+        candidate_dirs.push(std::path::PathBuf::from("/usr/local/sbin"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidate_dirs.push(std::path::PathBuf::from("/usr/local/bin"));
+        candidate_dirs.push(std::path::PathBuf::from("/usr/local/sbin"));
+    }
+
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        let home = base_dirs.home_dir();
+        candidate_dirs.push(home.join(".local/bin"));
+        candidate_dirs.push(home.join(".cargo/bin"));
+    }
+
+    let mut prepend_dirs = Vec::new();
+    for dir in candidate_dirs {
+        if dir.exists() {
+            let dir_str = dir.to_string_lossy().to_string();
+            if !paths.contains(&dir_str) {
+                prepend_dirs.push(dir_str);
+            }
+        }
+    }
+
+    if !prepend_dirs.is_empty() {
+        prepend_dirs.extend(paths);
+        prepend_dirs.join(":")
+    } else {
+        current_path
+    }
+}
+
+pub fn bootstrap_env_path() {
+    let bootstrapped = get_bootstrapped_path();
+    unsafe {
+        std::env::set_var("PATH", bootstrapped);
+    }
+}
+

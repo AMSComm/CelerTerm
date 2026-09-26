@@ -16,7 +16,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="License MIT" /></a>
   <img src="https://img.shields.io/badge/Engine-Pure_Rust_2024-orange?style=flat-square&logo=rust" alt="Rust 2024" />
   <img src="https://img.shields.io/badge/Rendering-WGPU_%2B_Softbuffer-7aa2f7?style=flat-square" alt="Rendering" />
-  <img src="https://img.shields.io/badge/Tests-69%2F69_Passed-06b6d4?style=flat-square" alt="Tests 69/69" />
+  <img src="https://img.shields.io/badge/Tests-71%2F71_Passed-06b6d4?style=flat-square" alt="Tests 71/71" />
 </p>
 
 ---
@@ -165,7 +165,7 @@ celerterm/
 │   ├── update.rs               # In-app GitHub release checker & SemVer comparator
 │   ├── window/                 # Window creation, macOS titlebar integration & layout geometry
 │   └── workspace/              # Multi-workspace state manager & disk snapshot persistence
-├── tests/                      # Comprehensive integration test suite (69 tests)
+├── tests/                      # Comprehensive integration test suite (71 tests)
 ├── CHANGELOG.md                # Standardized Keep a Changelog documentation
 ├── Cargo.toml                  # Rust package manifest & dependencies
 └── LICENSE                     # MIT License

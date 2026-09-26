@@ -140,6 +140,7 @@ impl Default for CelerApp {
 
 impl CelerApp {
     pub fn new() -> Self {
+        crate::pty::bootstrap_env_path();
         let config = load_config();
         let mut workspace_mgr = WorkspaceManager::new();
 
@@ -3146,6 +3147,7 @@ impl Drop for CelerApp {
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
+    crate::pty::bootstrap_env_path();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 
