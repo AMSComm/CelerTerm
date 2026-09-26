@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build release for (e.g. v0.1.0, leave empty for latest git tag)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -15,6 +21,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: vars
+        run: |
+          git fetch --tags || true
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              TAG="${{ github.ref_name }}"
+            else
+              TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+            fi
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -53,11 +75,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: vars
+        run: |
+          git fetch --tags || true
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              TAG="${{ github.ref_name }}"
+            else
+              TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+            fi
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxcb-xfixes0-dev
+          sudo apt-get install -y pkg-config libfontconfig1-dev libx11-dev libxkbcommon-dev libxcb-xfixes0-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -71,12 +111,12 @@ jobs:
           cp target/release/celerterm celerterm-linux-x86_64/
           cp assets/celerterm.desktop celerterm-linux-x86_64/
           cp assets/icon.png celerterm-linux-x86_64/celerterm.png
-          cp README.md CHANGELOG.md celerterm-linux-x86_64/
+          cp README.md CHANGELOG.md LICENSE celerterm-linux-x86_64/
           tar -czvf celerterm-linux-x86_64.tar.gz celerterm-linux-x86_64
 
       - name: Package Debian .deb
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION="${{ steps.vars.outputs.version }}"
           DEB_DIR="celerterm_${VERSION}_amd64"
           mkdir -p "${DEB_DIR}/DEBIAN"
           mkdir -p "${DEB_DIR}/usr/bin"
@@ -91,7 +131,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Maintainer: Huy <huy@celerterm.local>
+          Maintainer: AM Software <info@amsoftware.com.vn>
           Description: A high-performance minimalist GPU-accelerated terminal emulator
           EOF
           dpkg-deb --build "${DEB_DIR}" "celerterm_${VERSION}_amd64.deb"
@@ -111,6 +151,22 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine Version
+        id: vars
+        run: |
+          git fetch --tags || true
+          TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TAG" ]; then
+            if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+              TAG="${{ github.ref_name }}"
+            else
+              TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+            fi
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -120,30 +176,26 @@ jobs:
       - name: Extract Release Notes from CHANGELOG
         run: |
           python3 -c "
-          import sys
+          import re
+          tag = '${{ steps.vars.outputs.tag }}'
           with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
-              lines = f.readlines()
-          tag = '${{ github.ref_name }}'
-          ver = tag.lstrip('v')
-          capturing = False
-          body = []
-          for line in lines:
-              if line.startswith('## ['):
-                  if ver in line:
-                      capturing = True
-                      continue
-                  elif capturing:
-                      break
-              elif capturing:
-                  body.append(line)
-          notes = ''.join(body).strip()
+              content = f.read()
+          tag_escaped = re.escape(tag.lstrip('v'))
+          pattern = rf'(## \[[v]?{tag_escaped}\].*?)(?=\n## \[|\Z)'
+          match = re.search(pattern, content, re.DOTALL)
+          if match:
+              notes = match.group(1).strip()
+          else:
+              notes = f'Release {tag}'
           with open('RELEASE_NOTES.md', 'w', encoding='utf-8') as out:
-              out.write(notes if notes else f'Release {tag}')
+              out.write(notes)
           "
 
       - name: Publish Release to GitHub
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: CelerTerm ${{ steps.vars.outputs.tag }}
           body_path: RELEASE_NOTES.md
           files: |
             artifacts/macos-artifacts/*

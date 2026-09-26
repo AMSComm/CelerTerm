@@ -1,0 +1,70 @@
+name: Sync Release Notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to update release notes for (e.g. v0.1.0, leave empty for latest tag)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  sync-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update GitHub Release Notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch --tags || true
+          TARGET_TAG="${{ github.event.inputs.tag }}"
+          if [ -z "$TARGET_TAG" ]; then
+            TARGET_TAG=$(git tag --sort=-v:refname | head -n 1)
+          fi
+          echo "Target tag: $TARGET_TAG"
+          
+          python3 -c "
+          import re
+          tag = '$TARGET_TAG'
+          with open('CHANGELOG.md', 'r') as f:
+              content = f.read()
+          tag_escaped = re.escape(tag.lstrip('v'))
+          pattern = rf'(## \[[v]?{tag_escaped}\].*?)(?=\n## \[|\Z)'
+          match = re.search(pattern, content, re.DOTALL)
+          if match:
+              notes = match.group(1).strip()
+              with open('release_notes.md', 'w') as out:
+                  out.write(notes)
+              print('Extracted release notes successfully.')
+          else:
+              print('Warning: tag not found in CHANGELOG.md')
+          "
+
+          if [ -f release_notes.md ]; then
+            echo "Syncing release notes for $TARGET_TAG in repo ${{ github.repository }}..."
+            SUCCESS=false
+            for i in {1..5}; do
+              if gh release edit "$TARGET_TAG" --repo "${{ github.repository }}" --notes-file release_notes.md; then
+                echo "Successfully updated $TARGET_TAG release notes on GitHub!"
+                SUCCESS=true
+                break
+              fi
+              echo "Attempt $i failed to edit release $TARGET_TAG. Waiting 5 seconds before retry..."
+              sleep 5
+            done
+            if [ "$SUCCESS" != "true" ]; then
+              echo "Failed to edit release after 5 attempts. Checking if release exists..."
+              gh release view "$TARGET_TAG" --repo "${{ github.repository }}" || echo "Release $TARGET_TAG does not exist on GitHub."
+              exit 1
+            fi
+          else
+            echo "No release_notes.md file generated, skipping update."
+          fi
