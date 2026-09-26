@@ -1,6 +1,9 @@
-use std::fmt::Write;
+use std::fmt::Write as FmtWrite;
+use std::io::Write as IoWrite;
+use std::sync::Arc;
+use parking_lot::Mutex;
 use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, GridCell, Row};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -18,17 +21,50 @@ impl Dimensions for TermSize {
     fn columns(&self) -> usize { self.columns }
 }
 
+pub type SharedPtyWriter = Arc<Mutex<Box<dyn IoWrite + Send>>>;
+
+#[derive(Clone, Default)]
+pub struct PtySink {
+    inner: Arc<Mutex<Option<SharedPtyWriter>>>,
+}
+
+impl PtySink {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_writer(&self, writer: SharedPtyWriter) {
+        *self.inner.lock() = Some(writer);
+    }
+}
+
+impl EventListener for PtySink {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event
+            && let Some(writer) = self.inner.lock().as_ref()
+        {
+            let mut w = writer.lock();
+            let _ = w.write_all(text.as_bytes());
+            let _ = w.flush();
+        }
+    }
+}
+
 pub struct TermScreen {
-    pub term: Term<VoidListener>,
+    pub term: Term<PtySink>,
     processor: Processor,
     pub size: TermSize,
     pub dirty: bool,
+    pub sink: PtySink,
 }
 
 impl TermScreen {
     pub fn new(columns: usize, lines: usize) -> Self {
         let size = TermSize { columns, lines };
-        let term = Term::new(Config::default(), &size, VoidListener);
+        let sink = PtySink::new();
+        let term = Term::new(Config::default(), &size, sink.clone());
         let processor = Processor::default();
 
         Self {
@@ -36,7 +72,12 @@ impl TermScreen {
             processor,
             size,
             dirty: true,
+            sink,
         }
+    }
+
+    pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn IoWrite + Send>>>) {
+        self.sink.set_writer(writer);
     }
 
     pub fn process_bytes(&mut self, bytes: &[u8]) {

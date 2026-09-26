@@ -24,7 +24,9 @@ pub fn save_snapshot_to_file(manager: &WorkspaceManager, path: &Path) -> Result<
         fs::create_dir_all(parent)?;
     }
     let content = save_snapshot_to_string(manager)?;
-    fs::write(path, content)?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, content)?;
+    fs::rename(&tmp_path, path)?;
     Ok(())
 }
 

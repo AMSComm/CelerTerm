@@ -240,3 +240,80 @@ fn test_scrollback_export_and_restore_colors_and_styles() {
     assert_eq!(fg15, Color::Spec(Rgb { r: 120, g: 180, b: 240 }));
 }
 
+#[test]
+fn test_tab_scrollback_preservation_on_close_or_exit() {
+    use celerterm::term::TermScreen;
+    use tempfile::tempdir;
+
+    let dir = tempdir().expect("Create tempdir");
+    let file_path = dir.path().join("workspace_snapshot.json");
+
+    let mut manager = WorkspaceManager::new();
+    let tab1_id = manager.get_active_workspace().unwrap().active_tab_id.clone();
+    let tab2_id = manager.new_tab(PathBuf::from("/Users/test/tab2")).unwrap();
+
+    // Simulate tab1 having active scrollback output
+    let mut screen1 = TermScreen::new(80, 24);
+    screen1.process_bytes(b"huy@mac:~$ git status\r\nOn branch dev\r\nnothing to commit\r\n");
+    let scrollback1 = screen1.get_scrollback_lines(100);
+
+    // Save scrollback to tab1 in workspace manager
+    for ws in &mut manager.workspaces {
+        if let Some(tab) = ws.tabs.iter_mut().find(|t| t.id == tab1_id) {
+            tab.scrollback_cache = scrollback1.clone();
+        }
+    }
+
+    // Save to disk snapshot
+    save_snapshot_to_file(&manager, &file_path).expect("Save snapshot");
+
+    // Load from disk and verify tab1 has the preserved scrollback
+    let restored = load_snapshot_from_file(&file_path).expect("Load snapshot");
+    let restored_ws = restored.get_active_workspace().unwrap();
+    assert_eq!(restored_ws.tabs.len(), 2);
+    let restored_tab1 = restored_ws.tabs.iter().find(|t| t.id == tab1_id).unwrap();
+    assert!(!restored_tab1.scrollback_cache.is_empty());
+    assert!(restored_tab1.scrollback_cache.iter().any(|l| l.contains("On branch dev")));
+    assert_eq!(restored_ws.tabs.iter().find(|t| t.id == tab2_id).unwrap().cwd, PathBuf::from("/Users/test/tab2"));
+}
+
+#[test]
+fn test_pty_sink_forwards_dsr_cursor_report() {
+    use celerterm::term::TermScreen;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::io::Write;
+
+    #[derive(Clone)]
+    struct MockWriter {
+        data: Arc<Mutex<Vec<u8>>>,
+    }
+    impl Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.data.lock().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let shared_data = Arc::new(Mutex::new(Vec::new()));
+    let mock = MockWriter { data: shared_data.clone() };
+
+    let mut screen = TermScreen::new(80, 24);
+    let writer = Arc::new(Mutex::new(Box::new(mock) as Box<dyn Write + Send>));
+    screen.set_pty_writer(writer);
+
+    // Print 3 lines of restored scrollback
+    screen.process_bytes(b"Restored line 1\r\nRestored line 2\r\nRestored line 3\r\n");
+
+    // Shell sends DSR \x1b[6n to query cursor position
+    screen.process_bytes(b"\x1b[6n");
+
+    // Verify PtySink wrote the cursor response \x1b[4;1R (cursor is at line 4, col 1)
+    let data = shared_data.lock();
+    let written = std::str::from_utf8(&data).unwrap_or("");
+    assert!(written.contains("\x1b[4;1R"), "PtySink should reply with cursor position at line 4, col 1");
+}
+

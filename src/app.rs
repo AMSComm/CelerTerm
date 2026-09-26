@@ -31,12 +31,22 @@ pub enum UserEvent {
 
 pub struct TabSession {
     pub screen: TermScreen,
-    pub writer: Box<dyn Write + Send>,
+    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     pub child_pid: Option<u32>,
 }
 
 impl TabSession {
+    pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        let mut w = self.writer.lock();
+        w.write_all(buf)
+    }
+
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        let mut w = self.writer.lock();
+        w.flush()
+    }
+
     pub fn foreground_process_id(&self) -> Option<u32> {
         #[cfg(unix)]
         {
@@ -61,6 +71,7 @@ pub struct CelerApp {
     proxy: Option<EventLoopProxy<UserEvent>>,
     mouse_pos: (f64, f64),
     ime_preedit: Option<(String, Option<(usize, usize)>)>,
+    last_preedit: Option<(String, std::time::Instant)>,
     scale_factor: f32,
     cols: usize,
     rows: usize,
@@ -115,6 +126,7 @@ impl CelerApp {
             proxy: None,
             mouse_pos: (0.0, 0.0),
             ime_preedit: None,
+            last_preedit: None,
             scale_factor: 1.0,
             cols,
             rows,
@@ -162,15 +174,18 @@ impl CelerApp {
     pub fn spawn_tab_session(&mut self, tab_id: &str, cwd: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
         let mut pty = PtySession::spawn(self.cols as u16, self.rows as u16, cwd)?;
         let mut screen = TermScreen::new(self.cols, self.rows);
+        let writer = Arc::new(Mutex::new(pty.writer));
+        screen.set_pty_writer(writer.clone());
 
         // Pre-populate screen with scrollback cache if restoring tab
-        if let Some(ws) = self.workspace_mgr.get_active_workspace()
-            && let Some(tab) = ws.tabs.iter().find(|t| t.id == tab_id)
-        {
-            for line in &tab.scrollback_cache {
-                screen.process_bytes(line.as_bytes());
-                screen.process_bytes(b"\r\n");
-            }
+        let scrollback = self.workspace_mgr.workspaces.iter()
+            .find_map(|ws| ws.tabs.iter().find(|t| t.id == tab_id))
+            .map(|t| t.scrollback_cache.clone())
+            .unwrap_or_default();
+
+        for line in &scrollback {
+            screen.process_bytes(line.as_bytes());
+            screen.process_bytes(b"\r\n");
         }
 
         let child_pid = pty.child_pid;
@@ -206,7 +221,7 @@ impl CelerApp {
 
         let session = TabSession {
             screen,
-            writer: pty.writer,
+            writer,
             master: pty.master,
             child_pid,
         };
@@ -320,12 +335,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             UserEvent::PtyExited { tab_id } => {
-                self.tab_sessions.remove(&tab_id);
-                let _ = self.workspace_mgr.close_tab(&tab_id);
-                if self.tab_sessions.is_empty() {
+                if self.tab_sessions.len() <= 1 {
                     self.save_workspace_state();
                     event_loop.exit();
-                } else if let Some(ref window) = self.window {
+                    return;
+                }
+                if let Some(session) = self.tab_sessions.get(&tab_id) {
+                    for ws in &mut self.workspace_mgr.workspaces {
+                        if let Some(tab) = ws.tabs.iter_mut().find(|t| t.id == tab_id)
+                            && self.config.workspace.save_scrollback
+                        {
+                            tab.scrollback_cache = session.screen.get_scrollback_lines(self.config.workspace.max_scrollback_lines);
+                        }
+                    }
+                }
+                self.tab_sessions.remove(&tab_id);
+                let _ = self.workspace_mgr.close_tab(&tab_id);
+                self.save_workspace_state();
+                if let Some(ref window) = self.window {
                     window.request_redraw();
                 }
             }
@@ -415,25 +442,33 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 // If Option/Alt is pressed, ignore dead-key characters produced by macOS IME
                 if self.modifiers.alt_key() && self.config.macos.option_as_alt {
                     self.ime_preedit = None;
+                    self.last_preedit = None;
                     return;
                 }
-                let had_preedit = self.ime_preedit.is_some();
+                let had_preedit = self.ime_preedit.is_some()
+                    || self.last_preedit.as_ref().map(|(_, t)| t.elapsed() < std::time::Duration::from_millis(1000)).unwrap_or(false);
                 self.ime_preedit = None;
+                self.last_preedit = None;
 
                 // Send committed IME text (Vietnamese / Japanese) to the active tab's PTY
                 if let Some(active_id) = self.active_tab_id()
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
                 {
-                    let _ = session.writer.write_all(text.as_bytes());
+                    let _ = session.write_all(text.as_bytes());
                     // If text was committed from preedit, also send the commit key (Space, Return, Tab, punctuation)
                     // unless text already contains or ends with that suffix
-                    if had_preedit && let Some(extra) = get_ime_commit_extra() {
-                        let extra_str = String::from_utf8_lossy(&extra);
-                        if !text.ends_with(extra_str.as_ref()) {
-                            let _ = session.writer.write_all(&extra);
+                    if had_preedit {
+                        if let Some(extra) = get_ime_commit_extra() {
+                            let extra_str = String::from_utf8_lossy(&extra);
+                            if !text.ends_with(extra_str.as_ref()) {
+                                let _ = session.write_all(&extra);
+                            }
+                        } else if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
+                            // Default fallback for Vietnamese IME commit: space key
+                            let _ = session.write_all(b" ");
                         }
                     }
-                    let _ = session.writer.flush();
+                    let _ = session.flush();
                 }
                 if let Some(ref window) = self.window {
                     window.request_redraw();
@@ -447,6 +482,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 if text.is_empty() {
                     self.ime_preedit = None;
                 } else {
+                    self.last_preedit = Some((text.clone(), std::time::Instant::now()));
                     self.ime_preedit = Some((text, cursor_range));
                 }
                 if let Some(ref window) = self.window {
@@ -477,16 +513,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let btn = if lines > 0 { 64 } else { 65 };
                         let payload = format!("\x1b[<{};{};{}M", btn, col, row);
                         for _ in 0..lines.abs().min(5) {
-                            let _ = session.writer.write_all(payload.as_bytes());
+                            let _ = session.write_all(payload.as_bytes());
                         }
-                        let _ = session.writer.flush();
+                        let _ = session.flush();
                     } else if session.screen.is_alt_screen() {
                         // Alternate screen without mouse mode: lines > 0 is scroll up (Up Arrow), lines < 0 is scroll down (Down Arrow)
                         let arrow = if lines > 0 { b"\x1b[A" } else { b"\x1b[B" };
                         for _ in 0..lines.abs().min(5) {
-                            let _ = session.writer.write_all(arrow);
+                            let _ = session.write_all(arrow);
                         }
-                        let _ = session.writer.flush();
+                        let _ = session.flush();
                     } else {
                         // Normal shell: lines > 0 scrolls up into history (+lines), lines < 0 scrolls down to prompt (-lines)
                         session.screen.scroll_display(lines);
@@ -530,14 +566,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 // Middle-click or clicking on 'x' at tab's right edge closes tab
                                 let close_area_w = (16.0 * self.scale_factor).max(12.0);
                                 if button == MouseButton::Middle || mx >= rect.x + rect.width - close_area_w {
-                                    self.tab_sessions.remove(tab_id);
-                                    let _ = self.workspace_mgr.close_tab(tab_id);
-                                    if self.tab_sessions.is_empty() {
+                                    if self.tab_sessions.len() <= 1 {
                                         self.save_workspace_state();
                                         event_loop.exit();
-                                    } else {
-                                        window.request_redraw();
+                                        return;
                                     }
+                                    if let Some(session) = self.tab_sessions.get(tab_id) {
+                                        for ws in &mut self.workspace_mgr.workspaces {
+                                            if let Some(tab) = ws.tabs.iter_mut().find(|t| t.id == *tab_id)
+                                                && self.config.workspace.save_scrollback
+                                            {
+                                                tab.scrollback_cache = session.screen.get_scrollback_lines(self.config.workspace.max_scrollback_lines);
+                                            }
+                                        }
+                                    }
+                                    self.tab_sessions.remove(tab_id);
+                                    let _ = self.workspace_mgr.close_tab(tab_id);
+                                    self.save_workspace_state();
+                                    window.request_redraw();
                                 } else if button == MouseButton::Left
                                     && let Some(ws) = self.workspace_mgr.get_active_workspace_mut()
                                 {
@@ -554,6 +600,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let cwd = self.get_active_tab_cwd();
                             if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
                                 let _ = self.spawn_tab_session(&new_tab_id, Some(&cwd));
+                                self.save_workspace_state();
                                 window.request_redraw();
                             }
                         } else if !clicked_tab && button == MouseButton::Left {
@@ -590,6 +637,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let cwd = self.get_active_tab_cwd();
                             if let Ok(new_tab_id) = self.workspace_mgr.new_tab(cwd.clone()) {
                                 let _ = self.spawn_tab_session(&new_tab_id, Some(&cwd));
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -597,12 +645,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::CloseTab => {
                             if let Some(active_id) = self.active_tab_id() {
-                                self.tab_sessions.remove(&active_id);
-                                let _ = self.workspace_mgr.close_tab(&active_id);
-                                if self.tab_sessions.is_empty() {
+                                if self.tab_sessions.len() <= 1 {
                                     self.save_workspace_state();
                                     event_loop.exit();
-                                } else if let Some(ref win) = window {
+                                    return;
+                                }
+                                if let Some(session) = self.tab_sessions.get(&active_id) {
+                                    for ws in &mut self.workspace_mgr.workspaces {
+                                        if let Some(tab) = ws.tabs.iter_mut().find(|t| t.id == active_id)
+                                            && self.config.workspace.save_scrollback
+                                        {
+                                            tab.scrollback_cache = session.screen.get_scrollback_lines(self.config.workspace.max_scrollback_lines);
+                                        }
+                                    }
+                                }
+                                self.tab_sessions.remove(&active_id);
+                                let _ = self.workspace_mgr.close_tab(&active_id);
+                                self.save_workspace_state();
+                                if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
                             }
@@ -680,11 +740,11 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     payload.extend_from_slice(b"\x1b[200~");
                                     payload.extend_from_slice(text.as_bytes());
                                     payload.extend_from_slice(b"\x1b[201~");
-                                    let _ = session.writer.write_all(&payload);
+                                    let _ = session.write_all(&payload);
                                 } else {
-                                    let _ = session.writer.write_all(text.as_bytes());
+                                    let _ = session.write_all(text.as_bytes());
                                 }
-                                let _ = session.writer.flush();
+                                let _ = session.flush();
                             }
                         }
                         KeyAction::Copy => {
@@ -694,8 +754,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if let Some(active_id) = self.active_tab_id()
                                 && let Some(session) = self.tab_sessions.get_mut(&active_id)
                             {
-                                let _ = session.writer.write_all(b"\x0c");
-                                let _ = session.writer.flush();
+                                let _ = session.write_all(b"\x0c");
+                                let _ = session.flush();
                             }
                         }
                         KeyAction::IncreaseFontSize => {
@@ -733,8 +793,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 && let Some(session) = self.tab_sessions.get_mut(&active_id)
                             {
                                 session.screen.scroll_to_bottom();
-                                let _ = session.writer.write_all(&bytes);
-                                let _ = session.writer.flush();
+                                let _ = session.write_all(&bytes);
+                                let _ = session.flush();
                             }
                         }
                         KeyAction::Text(text) => {
@@ -742,8 +802,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 && let Some(session) = self.tab_sessions.get_mut(&active_id)
                             {
                                 session.screen.scroll_to_bottom();
-                                let _ = session.writer.write_all(text.as_bytes());
-                                let _ = session.writer.flush();
+                                let _ = session.write_all(text.as_bytes());
+                                let _ = session.flush();
                             }
                         }
                     }
@@ -1185,6 +1245,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             window.request_redraw();
         }
     }
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_workspace_state();
+    }
+}
+
+impl Drop for CelerApp {
+    fn drop(&mut self) {
+        self.save_workspace_state();
+    }
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -1226,7 +1295,7 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
         let app = NSApplication::sharedApplication(mtm);
         if let Some(event) = app.currentEvent() {
             unsafe {
-                if event.r#type() == NSEventType::KeyDown {
+                if event.r#type() == NSEventType::KeyDown || event.r#type() == NSEventType::KeyUp {
                     let code = event.keyCode();
                     if code == 49 { // Space (kVK_Space)
                         return Some(b" ".to_vec());
@@ -1254,6 +1323,9 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
     }
     if is_key_down(36) || is_key_down(76) {
         return Some(b"\r".to_vec());
+    }
+    if is_key_down(48) {
+        return Some(b"\t".to_vec());
     }
 
     None

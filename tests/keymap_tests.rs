@@ -243,3 +243,45 @@ fn test_cmd_clipboard_and_utility_shortcuts() {
         Some(KeyAction::ResetFontSize)
     );
 }
+
+#[test]
+fn test_vietnamese_ime_commit_decision_logic() {
+    fn process_ime_commit(
+        had_preedit: bool,
+        text: &str,
+        extra: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let mut out = text.as_bytes().to_vec();
+        if had_preedit {
+            if let Some(extra_bytes) = extra {
+                let extra_str = String::from_utf8_lossy(extra_bytes);
+                if !text.ends_with(extra_str.as_ref()) {
+                    out.extend_from_slice(extra_bytes);
+                }
+            } else if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
+                out.push(b' ');
+            }
+        }
+        out
+    }
+
+    // 1. Vietnamese word committed with Space
+    let result_space = process_ime_commit(true, "tiếng", Some(b" "));
+    assert_eq!(String::from_utf8(result_space).unwrap(), "tiếng ");
+
+    // 2. Vietnamese word committed with Enter
+    let result_enter = process_ime_commit(true, "tiếng", Some(b"\r"));
+    assert_eq!(String::from_utf8(result_enter).unwrap(), "tiếng\r");
+
+    // 3. Fallback when extra key event was consumed: automatically adds Space
+    let result_fallback = process_ime_commit(true, "Việt", None);
+    assert_eq!(String::from_utf8(result_fallback).unwrap(), "Việt ");
+
+    // 4. Committed text already ending in punctuation does not duplicate or add space
+    let result_punct = process_ime_commit(true, "tiếng.", Some(b"."));
+    assert_eq!(String::from_utf8(result_punct).unwrap(), "tiếng.");
+
+    // 5. Normal input without preedit (had_preedit = false) does not append anything
+    let result_normal = process_ime_commit(false, "abc", Some(b" "));
+    assert_eq!(String::from_utf8(result_normal).unwrap(), "abc");
+}
