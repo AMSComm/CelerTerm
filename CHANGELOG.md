@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **macOS App Nap Prevention**:
+  - Disabled macOS App Nap via `NSAppSleepDisabled` and `NSSupportsAppNap` in `assets/Info.plist`.
+  - Added programmatic App Nap assertion via `NSProcessInfo.beginActivityWithOptions:reason:` (`NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical`) ensuring background PTY readers and event loops keep running when clamshell mode / `caffeinate` is active.
+- **PTY EINTR Signal Resilience**:
+  - Handled `ErrorKind::Interrupted` (`EINTR`) and `ErrorKind::WouldBlock` in the PTY reader thread loop, preventing premature thread termination and `SIGHUP` kill signals to child processes (`agy`, `claude code`, dev servers) when macOS changes display/power states.
+- **Lid Close / Sleep Terminal Grid Resize Protection**:
+  - Added guards to `recalculate_grid` to ignore sub-threshold / zero dimensions (`width < 120` or `height < 80`) when displays disconnect or sleep.
+  - Enforced minimum grid boundaries (`MIN_COLS = 20`, `MIN_ROWS = 4`), preventing `1x1` SIGWINCH terminal resizes that crash TUI applications (like Bubbletea-based `agy` or Ink-based `claude code`).
+- **Display Sleep Surface Recovery**:
+  - Handled `WindowEvent::Occluded` to schedule redraws on wake.
+  - Added automatic re-initialization of `softbuffer::Surface` in `RedrawRequested` if the macOS graphics backing store is invalidated during sleep/wake cycles.
+
 ## [0.2.3] - 2026-09-26
 
 ### Added

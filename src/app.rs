@@ -141,6 +141,7 @@ impl Default for CelerApp {
 impl CelerApp {
     pub fn new() -> Self {
         crate::pty::bootstrap_env_path();
+        crate::window::disable_app_nap();
         let config = load_config();
         let mut workspace_mgr = WorkspaceManager::new();
 
@@ -246,7 +247,16 @@ impl CelerApp {
     }
 
     pub fn recalculate_grid(&mut self, width: f32, height: f32) {
-        let scale = self.scale_factor;
+        // Prevent recalculating grid when window is minimized or display closed (zero or tiny dimensions)
+        if width < 120.0 || height < 80.0 {
+            return;
+        }
+
+        if self.renderer.cell_width <= 0.0 || self.renderer.cell_height <= 0.0 {
+            return;
+        }
+
+        let scale = self.scale_factor.max(0.5);
         let header_h = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
         let pad_x = (self.config.window.padding_x * scale).round();
         let pad_y = (self.config.window.padding_y * scale).round();
@@ -256,20 +266,38 @@ impl CelerApp {
         let cols = (term_w / self.renderer.cell_width).floor() as usize;
         let rows = (term_h / self.renderer.cell_height).floor() as usize;
 
-        if cols > 0 && rows > 0 {
-            self.cols = cols;
-            self.rows = rows;
-            for session in self.tab_sessions.values_mut() {
-                session.screen.resize(cols, rows);
-                let master = session.master.lock();
-                let _ = master.resize(portable_pty::PtySize {
-                    rows: rows as u16,
-                    cols: cols as u16,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                });
+        // Ensure minimum terminal size so TUI apps (agy, claude, fzf, vim) never receive panic-inducing 1x1 or 0x0 SIGWINCH
+        const MIN_COLS: usize = 20;
+        const MIN_ROWS: usize = 4;
+
+        if cols >= MIN_COLS && rows >= MIN_ROWS {
+            if self.cols != cols || self.rows != rows {
+                self.cols = cols;
+                self.rows = rows;
+                for session in self.tab_sessions.values_mut() {
+                    session.screen.resize(cols, rows);
+                    let master = session.master.lock();
+                    let _ = master.resize(portable_pty::PtySize {
+                        rows: rows as u16,
+                        cols: cols as u16,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
             }
         }
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn grid_size(&self) -> (usize, usize) {
+        (self.cols, self.rows)
     }
 
     pub fn spawn_tab_session(&mut self, tab_id: &str, cwd: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
@@ -310,6 +338,13 @@ impl CelerApp {
                             }).is_err() {
                                 break;
                             }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                            continue;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                            continue;
                         }
                         Err(_) => break,
                     }
@@ -885,6 +920,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             }
             WindowEvent::Focused(false) => {
                 self.is_selecting = false;
+            }
+            WindowEvent::Occluded(occluded) => {
+                if !occluded {
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
@@ -1850,7 +1892,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
 
                     if let (Some(w), Some(h)) = (NonZeroU32::new(win_size.width), NonZeroU32::new(win_size.height)) {
-                        let _ = surface.resize(w, h);
+                        if surface.resize(w, h).is_err() {
+                            if let Ok(ctx) = softbuffer::Context::new(window.clone())
+                                && let Ok(mut new_surface) = softbuffer::Surface::new(&ctx, window.clone())
+                            {
+                                let _ = new_surface.resize(w, h);
+                                *surface = new_surface;
+                            }
+                        }
+                    }
+
+                    if surface.buffer_mut().is_err()
+                        && let (Some(w), Some(h)) = (NonZeroU32::new(win_size.width), NonZeroU32::new(win_size.height))
+                        && let Ok(ctx) = softbuffer::Context::new(window.clone())
+                        && let Ok(mut new_surface) = softbuffer::Surface::new(&ctx, window.clone())
+                    {
+                        let _ = new_surface.resize(w, h);
+                        *surface = new_surface;
                     }
 
                     let mut buffer = match surface.buffer_mut() {
@@ -3148,6 +3206,7 @@ impl Drop for CelerApp {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     crate::pty::bootstrap_env_path();
+    crate::window::disable_app_nap();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);
 

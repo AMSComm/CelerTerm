@@ -157,3 +157,35 @@ fn test_header_layout_menu_button() {
     assert!(layout.menu_button_rect.x > layout.add_button_rect.x);
 }
 
+#[test]
+fn test_recalculate_grid_lid_close_protection() {
+    let mut app = celerterm::app::CelerApp::new();
+    let initial_cols = app.cols();
+    let initial_rows = app.rows();
+    assert!(initial_cols >= 20);
+    assert!(initial_rows >= 4);
+
+    // Simulate display sleep / lid close (zero or tiny dimensions)
+    app.recalculate_grid(0.0, 0.0);
+    assert_eq!(app.cols(), initial_cols, "Cols must not shrink to zero/one on zero width");
+    assert_eq!(app.rows(), initial_rows, "Rows must not shrink to zero/one on zero height");
+
+    app.recalculate_grid(1.0, 1.0);
+    assert_eq!(app.cols(), initial_cols, "Cols must not change on 1x1 dimension");
+    assert_eq!(app.rows(), initial_rows, "Rows must not change on 1x1 dimension");
+
+    app.recalculate_grid(50.0, 40.0);
+    assert_eq!(app.cols(), initial_cols, "Cols must not change on sub-threshold dimension");
+    assert_eq!(app.rows(), initial_rows, "Rows must not change on sub-threshold dimension");
+
+    // Valid resize
+    app.recalculate_grid(800.0, 600.0);
+    assert!(app.cols() >= 20);
+    assert!(app.rows() >= 4);
+}
+
+#[test]
+fn test_disable_app_nap_safe_execution() {
+    celerterm::window::disable_app_nap();
+}
+

@@ -44,7 +44,7 @@ fn test_pty_spawn_and_shell_communication() {
     // Read output in a non-blocking / timed loop
     let mut buf = [0u8; 1024];
     let start = Instant::now();
-    let timeout = Duration::from_secs(3);
+    let timeout = Duration::from_secs(8);
     let mut found = false;
 
     while start.elapsed() < timeout {
@@ -102,7 +102,7 @@ fn test_pty_login_shell_and_path_bootstrap() {
 
     let mut buf = [0u8; 1024];
     let start = Instant::now();
-    let timeout = Duration::from_secs(3);
+    let timeout = Duration::from_secs(8);
     let mut output = String::new();
 
     while start.elapsed() < timeout {

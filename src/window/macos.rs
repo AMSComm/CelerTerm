@@ -90,3 +90,40 @@ pub fn set_macos_app_icon(png_bytes: &[u8]) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_macos_app_icon(_png_bytes: &[u8]) {}
 
+#[cfg(target_os = "macos")]
+pub fn disable_app_nap() {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    unsafe {
+        if let Some(process_info_cls) = AnyClass::get("NSProcessInfo") {
+            let process_info: *mut AnyObject = msg_send![process_info_cls, processInfo];
+            if !process_info.is_null() {
+                if let Some(nsstring_cls) = AnyClass::get("NSString") {
+                    let reason_bytes = b"CelerTerm active terminal sessions\0";
+                    let reason: *mut AnyObject = msg_send![
+                        nsstring_cls,
+                        stringWithUTF8String: reason_bytes.as_ptr() as *const std::ffi::c_char
+                    ];
+                    // NSActivityUserInitiatedAllowingIdleSystemSleep = 0x00FFFFFFULL & ~0x00100000ULL = 0x00EFFFFFULL
+                    // NSActivityLatencyCritical = 0xFF00000000ULL
+                    let options: u64 = 0x00EFFFFF | 0xFF00000000;
+                    let activity: *mut AnyObject = msg_send![
+                        process_info,
+                        beginActivityWithOptions: options,
+                        reason: reason
+                    ];
+                    if !activity.is_null() {
+                        let _: *mut AnyObject = msg_send![activity, retain];
+                        log::info!("macOS App Nap disabled for CelerTerm");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn disable_app_nap() {}
+
+

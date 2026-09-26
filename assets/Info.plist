@@ -26,5 +26,9 @@
     <true/>
     <key>NSLocalNetworkUsageDescription</key>
     <string>CelerTerm requires local network access to connect to local devices, SSH servers, and development environments.</string>
+    <key>NSAppSleepDisabled</key>
+    <true/>
+    <key>NSSupportsAppNap</key>
+    <false/>
 </dict>
 </plist>
