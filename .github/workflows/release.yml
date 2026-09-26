@@ -42,7 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release
 
       - name: Package macOS App Bundle
         run: |
@@ -97,13 +97,13 @@ jobs:
       - name: Install Linux Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libx11-dev libxkbcommon-dev libxcb-xfixes0-dev
+          sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev libx11-dev libx11-xcb-dev libxkbcommon-dev libxcb-xfixes0-dev libxcb-render0-dev libxcb-shape0-dev
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
-        run: cargo build --release --locked
+        run: cargo build --release
 
       - name: Package tar.gz
         run: |
