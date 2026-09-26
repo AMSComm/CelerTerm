@@ -204,3 +204,19 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure Release Notes Synced
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          if [ -f RELEASE_NOTES.md ]; then
+            for i in {1..5}; do
+              if gh release edit "$TAG" --repo "${{ github.repository }}" --notes-file RELEASE_NOTES.md; then
+                echo "Successfully updated $TAG release notes on GitHub!"
+                break
+              fi
+              sleep 3
+            done
+          fi
+
