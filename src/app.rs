@@ -679,6 +679,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             {
                                 let cwd = self.get_active_tab_cwd();
                                 let _ = self.spawn_tab_session(&active_id, Some(&cwd));
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -689,6 +690,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 if let Some(active_id) = self.active_tab_id() {
                                     self.ensure_tab_session(&active_id);
                                 }
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -699,6 +701,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 if let Some(active_id) = self.active_tab_id() {
                                     self.ensure_tab_session(&active_id);
                                 }
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -707,6 +710,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::SelectTab(idx) => {
                             if let Ok(tab_id) = self.workspace_mgr.select_tab_by_1_index(idx) {
                                 self.ensure_tab_session(&tab_id);
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -715,6 +719,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::PreviousTab => {
                             if let Ok(tab_id) = self.workspace_mgr.select_previous_tab() {
                                 self.ensure_tab_session(&tab_id);
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
@@ -723,6 +728,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         KeyAction::NextTab => {
                             if let Ok(tab_id) = self.workspace_mgr.select_next_tab() {
                                 self.ensure_tab_session(&tab_id);
+                                self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
                                 }
