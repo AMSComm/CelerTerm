@@ -136,6 +136,30 @@ fn test_cmd_arrow_tab_navigation() {
     // Cmd+Right -> Next Tab
     let action_next = translate_key(&Key::Named(NamedKey::ArrowRight), mods, true);
     assert_eq!(action_next, Some(KeyAction::NextTab));
+
+    // Cmd+Up -> Move Tab Left
+    let action_move_left = translate_key(&Key::Named(NamedKey::ArrowUp), mods, true);
+    assert_eq!(action_move_left, Some(KeyAction::MoveTabLeft));
+
+    // Cmd+Down -> Move Tab Right
+    let action_move_right = translate_key(&Key::Named(NamedKey::ArrowDown), mods, true);
+    assert_eq!(action_move_right, Some(KeyAction::MoveTabRight));
+
+    // Linux / cross-platform fallback with Ctrl+Shift
+    let mods_ctrl_shift = Modifiers {
+        alt: false,
+        ctrl: true,
+        shift: true,
+        logo: false,
+    };
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowUp), mods_ctrl_shift, true),
+        Some(KeyAction::MoveTabLeft)
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowDown), mods_ctrl_shift, true),
+        Some(KeyAction::MoveTabRight)
+    );
 }
 
 #[test]

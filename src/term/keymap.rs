@@ -15,6 +15,8 @@ pub enum KeyAction {
     SelectTab(usize),
     PreviousTab,
     NextTab,
+    MoveTabLeft,
+    MoveTabRight,
     NewTab,
     CloseTab,
     Quit,
@@ -82,6 +84,8 @@ pub fn translate_key_event(
                 match named {
                     NamedKey::ArrowLeft => return Some(KeyAction::PreviousTab),
                     NamedKey::ArrowRight => return Some(KeyAction::NextTab),
+                    NamedKey::ArrowUp => return Some(KeyAction::MoveTabLeft),
+                    NamedKey::ArrowDown => return Some(KeyAction::MoveTabRight),
                     _ => {}
                 }
             }
@@ -89,15 +93,23 @@ pub fn translate_key_event(
     }
 
     // 0.1 Control + Shift combinations (cross-platform shortcuts)
-    if mods.ctrl && mods.shift && !mods.alt && !mods.logo
-        && let Key::Character(ch) = key
-    {
-        match ch.as_str() {
-            "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
-            "R" | "r" => return Some(KeyAction::ReloadConfig),
-            "N" | "n" => return Some(KeyAction::NewWorkspace),
-            "U" | "u" => return Some(KeyAction::CheckForUpdates),
-            _ => {}
+    if mods.ctrl && mods.shift && !mods.alt && !mods.logo {
+        if let Key::Character(ch) = key {
+            match ch.as_str() {
+                "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
+                "R" | "r" => return Some(KeyAction::ReloadConfig),
+                "N" | "n" => return Some(KeyAction::NewWorkspace),
+                "U" | "u" => return Some(KeyAction::CheckForUpdates),
+                _ => {}
+            }
+        }
+
+        if let Key::Named(named) = key {
+            match named {
+                NamedKey::ArrowUp => return Some(KeyAction::MoveTabLeft),
+                NamedKey::ArrowDown => return Some(KeyAction::MoveTabRight),
+                _ => {}
+            }
         }
     }
 

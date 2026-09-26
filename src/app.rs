@@ -1395,6 +1395,22 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 }
                             }
                         }
+                        KeyAction::MoveTabLeft => {
+                            if self.workspace_mgr.move_active_tab_left().is_ok() {
+                                self.save_workspace_state();
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::MoveTabRight => {
+                            if self.workspace_mgr.move_active_tab_right().is_ok() {
+                                self.save_workspace_state();
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
                         KeyAction::Paste => {
                             if let Ok(mut clipboard) = arboard::Clipboard::new()
                                 && let Ok(text) = clipboard.get_text()

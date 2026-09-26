@@ -16,7 +16,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="License MIT" /></a>
   <img src="https://img.shields.io/badge/Engine-Pure_Rust_2024-orange?style=flat-square&logo=rust" alt="Rust 2024" />
   <img src="https://img.shields.io/badge/Rendering-WGPU_%2B_Softbuffer-7aa2f7?style=flat-square" alt="Rendering" />
-  <img src="https://img.shields.io/badge/Tests-55%2F55_Passed-06b6d4?style=flat-square" alt="Tests 55/55" />
+  <img src="https://img.shields.io/badge/Tests-56%2F56_Passed-06b6d4?style=flat-square" alt="Tests 56/56" />
 </p>
 
 ---
@@ -68,6 +68,8 @@ Traditional terminal emulators either carry heavy Web / Electron runtimes with h
 | **Select Tab (1..9)** | `Cmd + 1` .. `Cmd + 9` | `Alt + 1` .. `Alt + 9` |
 | **Previous Tab** | `Cmd + Left` or `Cmd + Shift + [` | `Ctrl + PageUp` |
 | **Next Tab** | `Cmd + Right` or `Cmd + Shift + ]` | `Ctrl + PageDown` |
+| **Move Tab Left** | `Cmd + Up` | `Ctrl + Shift + Up` |
+| **Move Tab Right** | `Cmd + Down` | `Ctrl + Shift + Down` |
 | **Workspace Manager** | `Cmd + Shift + O` | `Ctrl + Shift + O` |
 | **New Workspace** | `Cmd + Shift + N` | `Ctrl + Shift + N` |
 | **Check for Updates** | `Cmd + Shift + U` | `Ctrl + Shift + U` |

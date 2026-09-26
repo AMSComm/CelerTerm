@@ -128,6 +128,65 @@ fn test_workspace_tab_switching_by_index_and_direction() {
 }
 
 #[test]
+fn test_workspace_tab_move_left_and_right() {
+    let mut manager = WorkspaceManager::new();
+    let tab1_id = manager.get_active_workspace().unwrap().active_tab_id.clone();
+    let tab2_id = manager.new_tab(PathBuf::from("/tmp/tab2")).unwrap();
+    let tab3_id = manager.new_tab(PathBuf::from("/tmp/tab3")).unwrap();
+
+    // Initial order: [tab1, tab2, tab3], active is tab3 (index 2)
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[0].id, tab1_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[1].id, tab2_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[2].id, tab3_id);
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab3_id);
+
+    // 1. Move tab3 left (from index 2 to index 1): order becomes [tab1, tab3, tab2]
+    let pos = manager.move_active_tab_left().expect("Move tab3 left");
+    assert_eq!(pos, 1);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[0].id, tab1_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[1].id, tab3_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[2].id, tab2_id);
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab3_id);
+
+    // 2. Move tab3 left again (from index 1 to index 0): order becomes [tab3, tab1, tab2]
+    let pos = manager.move_active_tab_left().expect("Move tab3 left to 0");
+    assert_eq!(pos, 0);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[0].id, tab3_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[1].id, tab1_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[2].id, tab2_id);
+    assert_eq!(manager.get_active_workspace().unwrap().active_tab_id, tab3_id);
+
+    // 3. Move tab3 left at index 0: should clamp at 0 and keep order [tab3, tab1, tab2]
+    let pos = manager.move_active_tab_left().expect("Move tab3 left clamped");
+    assert_eq!(pos, 0);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[0].id, tab3_id);
+
+    // 4. Move tab3 right (from index 0 to index 1): order becomes [tab1, tab3, tab2]
+    let pos = manager.move_active_tab_right().expect("Move tab3 right to 1");
+    assert_eq!(pos, 1);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[0].id, tab1_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[1].id, tab3_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[2].id, tab2_id);
+
+    // 5. Move tab3 right (from index 1 to index 2): order becomes [tab1, tab2, tab3]
+    let pos = manager.move_active_tab_right().expect("Move tab3 right to 2");
+    assert_eq!(pos, 2);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[0].id, tab1_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[1].id, tab2_id);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[2].id, tab3_id);
+
+    // 6. Move tab3 right at index 2: should clamp at last index and keep order [tab1, tab2, tab3]
+    let pos = manager.move_active_tab_right().expect("Move tab3 right clamped");
+    assert_eq!(pos, 2);
+    assert_eq!(manager.get_active_workspace().unwrap().tabs[2].id, tab3_id);
+
+    // 7. Single-tab workspace handles move gracefully
+    let mut single_mgr = WorkspaceManager::new();
+    assert_eq!(single_mgr.move_active_tab_left().unwrap(), 0);
+    assert_eq!(single_mgr.move_active_tab_right().unwrap(), 0);
+}
+
+#[test]
 fn test_format_tab_title_logic() {
     use celerterm::pty::format_tab_title;
 

@@ -187,6 +187,34 @@ impl WorkspaceManager {
         Ok(id)
     }
 
+    pub fn move_active_tab_left(&mut self) -> Result<usize, String> {
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        if ws.tabs.len() <= 1 {
+            return Ok(0);
+        }
+        let current_pos = ws.tabs.iter().position(|t| t.id == ws.active_tab_id).ok_or("Active tab not found")?;
+        if current_pos > 0 {
+            ws.tabs.swap(current_pos, current_pos - 1);
+            Ok(current_pos - 1)
+        } else {
+            Ok(0)
+        }
+    }
+
+    pub fn move_active_tab_right(&mut self) -> Result<usize, String> {
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        if ws.tabs.len() <= 1 {
+            return Ok(0);
+        }
+        let current_pos = ws.tabs.iter().position(|t| t.id == ws.active_tab_id).ok_or("Active tab not found")?;
+        if current_pos + 1 < ws.tabs.len() {
+            ws.tabs.swap(current_pos, current_pos + 1);
+            Ok(current_pos + 1)
+        } else {
+            Ok(current_pos)
+        }
+    }
+
     pub fn next_workspace(&mut self) -> Result<String, String> {
         if self.workspaces.is_empty() {
             return Err("No workspaces".to_string());
