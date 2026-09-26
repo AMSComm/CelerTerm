@@ -26,7 +26,7 @@ impl PtySession {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "CelerTerm");
-        cmd.env("TERM_PROGRAM_VERSION", "0.1.0");
+        cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
         if let Some(dir) = cwd
             && dir.exists()
         {
