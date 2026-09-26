@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-09-26
+
+### Added
+
+- **Shift+Enter & Ctrl+Enter Multiline Newline**:
+  - Emits line feed `\n` (`0x0A`) for `Shift+Enter` and `Ctrl+Enter`, enabling seamless multiline prompts in modern CLI assistants like **Antigravity CLI (`agy`)**, Claude Code, and REPLs without submitting the command.
+  - Added `Alt+Enter` (`\x1b\r`) escape sequence mapping.
+  - Added automated unit test coverage `test_shift_and_ctrl_enter_multiline_newline` (69/69 tests passing).
+- **macOS Sequoia Local Network Privacy & Ad-hoc Code Signing**:
+  - Added `NSLocalNetworkUsageDescription` key to `assets/Info.plist` describing local network permissions for SSH, dev servers, and local tooling.
+  - Added ad-hoc bundle code signing (`codesign --force --deep -s -`) to the macOS packaging CI/CD pipeline to ensure persistent TCC privacy database authorization.
+
 ## [0.2.2] - 2026-09-26
 
 ### Added
