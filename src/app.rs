@@ -21,6 +21,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::SelectionType;
 use parking_lot::Mutex;
 use log::info;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug)]
 pub enum UserEvent {
@@ -1014,9 +1015,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     // unless text already contains or ends with that suffix
                     if had_preedit {
                         if let Some(extra) = get_ime_commit_extra() {
-                            let extra_str = String::from_utf8_lossy(&extra);
-                            if !text.ends_with(extra_str.as_ref()) {
-                                let _ = session.write_all(&extra);
+                            if extra == [0x7f] {
+                                // If committed with Backspace, consume and apply backspace to the committed text
+                                if !text.is_empty() {
+                                    let _ = session.write_all(&extra);
+                                }
+                            } else {
+                                let extra_str = String::from_utf8_lossy(&extra);
+                                if !text.ends_with(extra_str.as_ref()) {
+                                    let _ = session.write_all(&extra);
+                                }
                             }
                         } else if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
                             // Default fallback for Vietnamese IME commit: space key
@@ -2260,17 +2268,28 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let cursor_y = start_y + (cursor_row as f32) * cell_h;
 
                             if cursor_y + cell_h <= height as f32 && cursor_x + cell_w <= width as f32 {
-                                // Anchor native macOS IME candidate window right below cursor
+                                // Anchor native macOS IME candidate window right below cursor.
+                                // Note: cursor_x and cursor_y are physical pixels, so pass Position::Physical
+                                // to prevent Retina 2x over-scaling.
                                 if let Some(ref window) = self.window {
+                                    let anchor_x = if let Some((ref text, Some((start, _)))) = self.ime_preedit {
+                                        let safe_idx = text.floor_char_boundary(start.min(text.len()));
+                                        let prefix = &text[..safe_idx];
+                                        cursor_x + UnicodeWidthStr::width(prefix) as f32 * cell_w
+                                    } else {
+                                        cursor_x
+                                    };
+
                                     window.set_ime_cursor_area(
-                                        winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(cursor_x as f64, (cursor_y + cell_h) as f64)),
-                                        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(cell_w as f64, cell_h as f64)),
+                                        winit::dpi::Position::Physical(winit::dpi::PhysicalPosition::new(anchor_x.round() as i32, (cursor_y + cell_h).round() as i32)),
+                                        winit::dpi::Size::Physical(winit::dpi::PhysicalSize::new(cell_w.round() as u32, cell_h.round() as u32)),
                                     );
                                 }
 
                                 if let Some((ref preedit_text, _)) = self.ime_preedit {
-                                    let preedit_len = preedit_text.chars().count();
-                                    let preedit_w = (preedit_len as f32 * cell_w).max(cell_w);
+                                    // Use unicode display width (takes 2 cells for full-width Japanese / CJK)
+                                    let preedit_cols = UnicodeWidthStr::width(preedit_text.as_str());
+                                    let preedit_w = (preedit_cols as f32 * cell_w).max(cell_w);
 
                                     // IME composition background (matches terminal background)
                                     TextRenderer::draw_rect(
@@ -2307,20 +2326,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         0x007AA2F7,
                                     );
 
-                                    // Active cursor positioned immediately after the preedit text
-                                    let active_cursor_x = cursor_x + preedit_w;
-                                    if active_cursor_x + cell_w <= width as f32 {
-                                        TextRenderer::draw_rect(
-                                            &mut buffer,
-                                            width,
-                                            height,
-                                            active_cursor_x as usize,
-                                            cursor_y as usize,
-                                            cell_w as usize,
-                                            cell_h as usize,
-                                            0x007AA2F7,
-                                        );
-                                    }
+                                    // NOTE: As in WezTerm, DO NOT draw a cursor box while composing (unconfirmed).
+                                    // The cursor will appear once confirmed.
                                 } else {
                                     let under_char = active_session.screen.get_cell_char(cursor_col, cursor_row);
 
@@ -3246,7 +3253,9 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
             unsafe {
                 if event.r#type() == NSEventType::KeyDown || event.r#type() == NSEventType::KeyUp {
                     let code = event.keyCode();
-                    if code == 49 { // Space (kVK_Space)
+                    if code == 51 || code == 117 { // Backspace (kVK_Delete) / ForwardDelete
+                        return Some(vec![0x7f]);
+                    } else if code == 49 { // Space (kVK_Space)
                         return Some(b" ".to_vec());
                     } else if code == 36 || code == 76 { // Return / KeypadEnter
                         return Some(b"\r".to_vec());
@@ -3267,6 +3276,9 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
     }
 
     // Hardware state fallback if event was already popped
+    if is_key_down(51) || is_key_down(117) {
+        return Some(vec![0x7f]);
+    }
     if is_key_down(49) {
         return Some(b" ".to_vec());
     }

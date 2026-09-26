@@ -423,9 +423,15 @@ fn test_vietnamese_ime_commit_decision_logic() {
         let mut out = text.as_bytes().to_vec();
         if had_preedit {
             if let Some(extra_bytes) = extra {
-                let extra_str = String::from_utf8_lossy(extra_bytes);
-                if !text.ends_with(extra_str.as_ref()) {
-                    out.extend_from_slice(extra_bytes);
+                if extra_bytes == [0x7f] {
+                    if !text.is_empty() {
+                        out.extend_from_slice(extra_bytes);
+                    }
+                } else {
+                    let extra_str = String::from_utf8_lossy(extra_bytes);
+                    if !text.ends_with(extra_str.as_ref()) {
+                        out.extend_from_slice(extra_bytes);
+                    }
                 }
             } else if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
                 out.push(b' ');
@@ -453,6 +459,34 @@ fn test_vietnamese_ime_commit_decision_logic() {
     // 5. Normal input without preedit (had_preedit = false) does not append anything
     let result_normal = process_ime_commit(false, "abc", Some(b" "));
     assert_eq!(String::from_utf8(result_normal).unwrap(), "abc");
+
+    // 6. Vietnamese word committed with Backspace: consumes and applies backspace immediately
+    let result_backspace = process_ime_commit(true, "tiếng", Some(&[0x7f]));
+    assert_eq!(result_backspace, b"ti\xe1\xba\xbfng\x7f".to_vec());
+
+    // 7. Empty preedit cancelled with Backspace: does not emit backspace to avoid deleting earlier text
+    let result_empty_backspace = process_ime_commit(true, "", Some(&[0x7f]));
+    assert_eq!(result_empty_backspace, Vec::<u8>::new());
+}
+
+#[test]
+fn test_japanese_and_cjk_preedit_display_width() {
+    use unicode_width::UnicodeWidthStr;
+
+    // Japanese Hiragana & Kanji are 2 columns wide each in terminal
+    assert_eq!(UnicodeWidthStr::width("にほん"), 6);
+    assert_eq!(UnicodeWidthStr::width("日本語"), 6);
+    assert_eq!(UnicodeWidthStr::width("こんにちは"), 10);
+
+    // Vietnamese accented characters are 1 column wide each
+    assert_eq!(UnicodeWidthStr::width("tiếng"), 5);
+    assert_eq!(UnicodeWidthStr::width("Việt"), 4);
+
+    // ASCII is 1 column wide each
+    assert_eq!(UnicodeWidthStr::width("hello"), 5);
+
+    // Mixed text
+    assert_eq!(UnicodeWidthStr::width("Rust日本語"), 4 + 6);
 }
 
 #[test]

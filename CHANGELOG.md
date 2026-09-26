@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Lid Close / Sleep Terminal Grid Resize Protection**:
   - Added guards to `recalculate_grid` to ignore sub-threshold / zero dimensions (`width < 120` or `height < 80`) when displays disconnect or sleep.
   - Enforced minimum grid boundaries (`MIN_COLS = 20`, `MIN_ROWS = 4`), preventing `1x1` SIGWINCH terminal resizes that crash TUI applications (like Bubbletea-based `agy` or Ink-based `claude code`).
+- **Vietnamese & CJK IME Backspace Handling**:
+  - Handled Backspace (`kVK_Delete` keycode 51, `kVK_ForwardDelete` keycode 117) during IME composition commit in `get_ime_commit_extra`.
+  - Automatically consumes and applies the Backspace character (`0x7f`) when confirming uncommitted preedit text, matching standard terminal behavior (like WezTerm) without requiring users to press Backspace twice.
+- **Japanese & CJK Preedit Display & Cursor Jitter Fix**:
+  - Hid the artificial block cursor during IME preedit composition (matches WezTerm and Alacritty; the cursor only appears once text is confirmed).
+  - Used `unicode_width::UnicodeWidthStr::width` for accurate calculation of double-width Japanese Hiragana, Katakana, and Kanji characters in preedit background and underline styling.
+  - Fixed candidate popup anchoring coordinate scaling on Retina displays by passing physical pixel coordinates to `winit::dpi::Position::Physical` instead of logical position.
 - **Display Sleep Surface Recovery**:
   - Handled `WindowEvent::Occluded` to schedule redraws on wake.
   - Added automatic re-initialization of `softbuffer::Surface` in `RedrawRequested` if the macOS graphics backing store is invalidated during sleep/wake cycles.
