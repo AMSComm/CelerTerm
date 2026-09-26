@@ -111,3 +111,10 @@ fn test_update_modal_buttons_layout_up_to_date() {
     assert_eq!(buttons[1].id, "github");
     assert_eq!(buttons[2].id, "close");
 }
+
+#[test]
+fn test_fetch_latest_release_live() {
+    let res = celerterm::update::fetch_latest_release("AMSComm/CelerTerm");
+    assert!(res.is_ok(), "Live GitHub API fetch must not fail: {:?}", res);
+}
+
