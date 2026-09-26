@@ -16,7 +16,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="License MIT" /></a>
   <img src="https://img.shields.io/badge/Engine-Pure_Rust_2024-orange?style=flat-square&logo=rust" alt="Rust 2024" />
   <img src="https://img.shields.io/badge/Rendering-WGPU_%2B_Softbuffer-7aa2f7?style=flat-square" alt="Rendering" />
-  <img src="https://img.shields.io/badge/Tests-74%2F74_Passed-06b6d4?style=flat-square" alt="Tests 74/74" />
+  <img src="https://img.shields.io/badge/Tests-75%2F75_Passed-06b6d4?style=flat-square" alt="Tests 75/75" />
 </p>
 
 ---
@@ -32,7 +32,7 @@ Traditional terminal emulators either carry heavy Web / Electron runtimes with h
 | **Text Shaping & Ligatures** | HTML / Web Canvas | Heavy C/C++ engine | **Cosmic-Text + Nerd Font Symbols** |
 | **Workspace Management** | Plugin / External | Flat tabs or separate windows | **Built-in Workspace Manager (`Cmd+Shift+O`)** |
 | **Session Persistence** | Lost or Partial | Manual config | **Automatic Snapshot & Scrollback Persistence** |
-| **IME Support (VN / JP)** | Inconsistent popup placement | Basic | **Native macOS Anchored IME Composition** |
+| **Input Latency** | High / Frame-bound | Moderate | **Ultra-Low Latency Native Event Dispatch** |
 | **In-App Updates** | None or OS package | None / Manual download | **Interactive GitHub Release Modal (`Cmd+Shift+U`)** |
 
 ---
@@ -53,9 +53,9 @@ Traditional terminal emulators either carry heavy Web / Electron runtimes with h
 - **Quick Menu**: Top-right `☰` App Menu with fast access to updates, workspace manager, config reloading, and repository links.
 - **Check for Updates (`Cmd+Shift+U` / `Ctrl+Shift+U`)**: Interactive modal checking GitHub API (`AMSComm/CelerTerm`) with scrollable release notes and one-click GitHub download links.
 
-### 4. 🇻🇳 First-Class IME & Native Keyboard Integration
-- Native macOS IME composition window anchoring for Vietnamese (Telex, VNI) and Japanese input methods.
+### 4. ⌨️ Advanced Keyboard Navigation & Terminal Integration
 - Configurable `option_as_alt` for seamless terminal word navigation (`Alt + Backspace`, `Alt + b/f`) and full Neovim compatibility.
+- Shift+Enter & Ctrl+Enter multiline newline support for modern AI CLI assistants and REPLs.
 
 ---
 

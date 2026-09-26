@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Hid the artificial block cursor during IME preedit composition (matches WezTerm and Alacritty; the cursor only appears once text is confirmed).
   - Used `unicode_width::UnicodeWidthStr::width` for accurate calculation of double-width Japanese Hiragana, Katakana, and Kanji characters in preedit background and underline styling.
   - Fixed candidate popup anchoring coordinate scaling on Retina displays by passing physical pixel coordinates to `winit::dpi::Position::Physical` instead of logical position.
+- **Shift+Enter & Real-Time Hardware Modifier Synchronization**:
+  - Polled real-time macOS modifier flags via `NSEvent::modifierFlags_class()`, preventing sticky/desynced modifier states across workspace switching shortcuts (`Cmd+Shift+[`, `Cmd+Shift+]`, modal).
+  - Enhanced Shift+Enter / Ctrl+Enter key translation to consistently match physical keycodes, named keys, and character representations (`\r`, `\n`).
+  - Automatically resets modifier states on window blur (`WindowEvent::Focused(false)`).
 - **Display Sleep Surface Recovery**:
   - Handled `WindowEvent::Occluded` to schedule redraws on wake.
   - Added automatic re-initialization of `softbuffer::Surface` in `RedrawRequested` if the macOS graphics backing store is invalidated during sleep/wake cycles.

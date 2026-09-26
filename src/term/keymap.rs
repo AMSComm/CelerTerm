@@ -183,6 +183,12 @@ pub fn translate_key_event(
                 return Some(KeyAction::Bytes(b"\n".to_vec()));
             }
         }
+        if matches!(key, Key::Named(NamedKey::Enter)) {
+            return Some(KeyAction::Bytes(b"\n".to_vec()));
+        }
+        if matches!(key, Key::Character(s) if s == "\r" || s == "\n") {
+            return Some(KeyAction::Bytes(b"\n".to_vec()));
+        }
     }
 
     // 3. Named keys (Arrows, Enter, Backspace, Space, etc.)

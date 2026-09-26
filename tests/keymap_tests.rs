@@ -139,9 +139,13 @@ fn test_shift_and_ctrl_enter_multiline_newline() {
     );
     assert_eq!(action_phys_numpad_enter, Some(KeyAction::Bytes(b"\n".to_vec())));
 
-    // Fallback Character("\r") with Shift
+    // Fallback Character("\r") and Character("\n") with Shift
     assert_eq!(
         translate_key(&Key::Character("\r".into()), shift_mods, true),
+        Some(KeyAction::Bytes(b"\n".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Character("\n".into()), shift_mods, true),
         Some(KeyAction::Bytes(b"\n".to_vec()))
     );
 }

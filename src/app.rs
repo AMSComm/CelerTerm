@@ -921,6 +921,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             }
             WindowEvent::Focused(false) => {
                 self.is_selecting = false;
+                self.modifiers = ModifiersState::default();
             }
             WindowEvent::Occluded(occluded) => {
                 if !occluded {
@@ -1632,6 +1633,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
+                #[cfg(target_os = "macos")]
+                let mods = unsafe {
+                    let flags = objc2_app_kit::NSEvent::modifierFlags_class();
+                    Modifiers {
+                        shift: flags.contains(objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagShift),
+                        ctrl: flags.contains(objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagControl),
+                        alt: flags.contains(objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagOption),
+                        logo: flags.contains(objc2_app_kit::NSEventModifierFlags::NSEventModifierFlagCommand),
+                    }
+                };
+
+                #[cfg(not(target_os = "macos"))]
                 let mods = Modifiers {
                     alt: self.modifiers.alt_key(),
                     ctrl: self.modifiers.control_key(),

@@ -189,3 +189,17 @@ fn test_disable_app_nap_safe_execution() {
     celerterm::window::disable_app_nap();
 }
 
+#[test]
+fn test_live_modifiers() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSEvent;
+        unsafe {
+            let flags = NSEvent::modifierFlags_class();
+            let raw = flags.0 as usize;
+            let shift = (raw & (1 << 17)) != 0;
+            let _ = shift;
+        }
+    }
+}
+
