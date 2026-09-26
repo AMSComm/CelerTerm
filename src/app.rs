@@ -650,6 +650,11 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
+                if self.workspace_modal.is_open
+                    && let Some(ref win) = self.window
+                {
+                    win.request_redraw();
+                }
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
                 // If Option/Alt is pressed, ignore dead-key characters produced by macOS IME
@@ -759,14 +764,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         if button == MouseButton::Left {
                             let (width, height) = (size.width as f32, size.height as f32);
                             let scale = self.scale_factor;
-                            let modal_w = (520.0 * scale).min(width - 40.0);
+                            let modal_w = (580.0 * scale).min(width - 32.0);
                             let header_h = (36.0 * scale).round();
                             let row_h = (32.0 * scale).round();
                             let ws_count = self.workspace_mgr.workspaces.len();
                             let list_h = (ws_count as f32 * row_h).max(32.0 * scale);
                             let is_editing = matches!(self.workspace_modal.mode, WorkspaceModalMode::Renaming { .. } | WorkspaceModalMode::Creating { .. });
                             let edit_h = if is_editing { (36.0 * scale).round() } else { 0.0 };
-                            let footer_h = (36.0 * scale).round();
+                            let footer_h = (42.0 * scale).round();
                             let modal_h = header_h + list_h + edit_h + footer_h + (16.0 * scale);
 
                             let modal_x = ((width - modal_w) * 0.5).max(10.0);
@@ -781,7 +786,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
 
                             // Close button on top right of header
-                            if my >= modal_y && my <= modal_y + header_h && mx >= modal_x + modal_w - (110.0 * scale) {
+                            let esc_label = "[Esc] Close";
+                            let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                            let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
+                            if my >= modal_y && my <= modal_y + header_h && mx >= esc_x {
                                 self.workspace_modal.is_open = false;
                                 self.workspace_modal.mode = WorkspaceModalMode::List;
                                 window.request_redraw();
@@ -810,70 +818,82 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 }
                             }
 
-                            // Check footer actions
-                            let footer_y = modal_y + modal_h - footer_h;
-                            if my >= footer_y && my <= footer_y + footer_h {
-                                // [n] New
-                                if mx >= modal_x + (10.0 * scale) && mx <= modal_x + (80.0 * scale) {
-                                    self.workspace_modal.mode = WorkspaceModalMode::Creating { input: String::new() };
-                                    window.request_redraw();
-                                    return;
-                                }
-                                // [r] Rename
-                                if mx >= modal_x + (85.0 * scale) && mx <= modal_x + (180.0 * scale) {
-                                    let idx = self.workspace_modal.selected_index;
-                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
-                                        self.workspace_modal.mode = WorkspaceModalMode::Renaming { input: ws.name.clone() };
-                                    }
-                                    window.request_redraw();
-                                    return;
-                                }
-                                // [d] Delete
-                                if mx >= modal_x + (185.0 * scale) && mx <= modal_x + (260.0 * scale) {
-                                    if self.workspace_mgr.workspaces.len() > 1 {
-                                        let idx = self.workspace_modal.selected_index;
-                                        if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
-                                            let target_id = ws.id.clone();
-                                            let _ = self.workspace_mgr.delete_workspace(&target_id);
-                                            self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
-                                            if let Some(active_id) = self.active_tab_id() {
-                                                self.ensure_tab_session(&active_id);
+                            // Check footer button chips
+                            let modal_rect = crate::window::Rect {
+                                x: modal_x,
+                                y: modal_y,
+                                width: modal_w,
+                                height: modal_h,
+                            };
+                            let footer_buttons = crate::window::calculate_modal_buttons(
+                                modal_rect,
+                                footer_h,
+                                scale,
+                                self.renderer.cell_width,
+                            );
+
+                            for btn in &footer_buttons {
+                                if btn.rect.contains(mx, my) {
+                                    match btn.id {
+                                        "new" => {
+                                            self.workspace_modal.mode = WorkspaceModalMode::Creating { input: String::new() };
+                                            window.request_redraw();
+                                            return;
+                                        }
+                                        "rename" => {
+                                            let idx = self.workspace_modal.selected_index;
+                                            if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                                self.workspace_modal.mode = WorkspaceModalMode::Renaming { input: ws.name.clone() };
                                             }
-                                            self.save_workspace_state();
+                                            window.request_redraw();
+                                            return;
                                         }
-                                    }
-                                    window.request_redraw();
-                                    return;
-                                }
-                                // [w] Open in Window
-                                if mx >= modal_x + (265.0 * scale) && mx <= modal_x + (420.0 * scale) {
-                                    let idx = self.workspace_modal.selected_index;
-                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx)
-                                        && let Ok(exe) = std::env::current_exe()
-                                    {
-                                        let _ = std::process::Command::new(exe)
-                                            .arg("--workspace")
-                                            .arg(&ws.name)
-                                            .spawn();
-                                    }
-                                    self.workspace_modal.is_open = false;
-                                    window.request_redraw();
-                                    return;
-                                }
-                                // [Enter] Switch
-                                if mx >= modal_x + (425.0 * scale) {
-                                    let idx = self.workspace_modal.selected_index;
-                                    if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
-                                        let target_id = ws.id.clone();
-                                        let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                        if let Some(active_id) = self.active_tab_id() {
-                                            self.ensure_tab_session(&active_id);
+                                        "delete" => {
+                                            if self.workspace_mgr.workspaces.len() > 1 {
+                                                let idx = self.workspace_modal.selected_index;
+                                                if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                                    let target_id = ws.id.clone();
+                                                    let _ = self.workspace_mgr.delete_workspace(&target_id);
+                                                    self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
+                                                    if let Some(active_id) = self.active_tab_id() {
+                                                        self.ensure_tab_session(&active_id);
+                                                    }
+                                                    self.save_workspace_state();
+                                                }
+                                            }
+                                            window.request_redraw();
+                                            return;
                                         }
-                                        self.save_workspace_state();
+                                        "window" => {
+                                            let idx = self.workspace_modal.selected_index;
+                                            if let Some(ws) = self.workspace_mgr.workspaces.get(idx)
+                                                && let Ok(exe) = std::env::current_exe()
+                                            {
+                                                let _ = std::process::Command::new(exe)
+                                                    .arg("--workspace")
+                                                    .arg(&ws.name)
+                                                    .spawn();
+                                            }
+                                            self.workspace_modal.is_open = false;
+                                            window.request_redraw();
+                                            return;
+                                        }
+                                        "switch" => {
+                                            let idx = self.workspace_modal.selected_index;
+                                            if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                                let target_id = ws.id.clone();
+                                                let _ = self.workspace_mgr.switch_workspace(&target_id);
+                                                if let Some(active_id) = self.active_tab_id() {
+                                                    self.ensure_tab_session(&active_id);
+                                                }
+                                                self.save_workspace_state();
+                                            }
+                                            self.workspace_modal.is_open = false;
+                                            window.request_redraw();
+                                            return;
+                                        }
+                                        _ => {}
                                     }
-                                    self.workspace_modal.is_open = false;
-                                    window.request_redraw();
-                                    return;
                                 }
                             }
                         }
@@ -1635,14 +1655,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
 
                         let scale = self.scale_factor;
-                        let modal_w = (520.0 * scale).min(width as f32 - 40.0);
+                        let modal_w = (580.0 * scale).min(width as f32 - 32.0);
                         let header_h = (36.0 * scale).round();
                         let row_h = (32.0 * scale).round();
                         let ws_count = self.workspace_mgr.workspaces.len();
                         let list_h = (ws_count as f32 * row_h).max(32.0 * scale);
                         let is_editing = matches!(self.workspace_modal.mode, WorkspaceModalMode::Renaming { .. } | WorkspaceModalMode::Creating { .. });
                         let edit_h = if is_editing { (36.0 * scale).round() } else { 0.0 };
-                        let footer_h = (36.0 * scale).round();
+                        let footer_h = (42.0 * scale).round();
                         let modal_h = header_h + list_h + edit_h + footer_h + (16.0 * scale);
 
                         let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
@@ -1690,13 +1710,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             "Workspaces",
                             0x00C0CAF5,
                         );
+                        let esc_label = "[Esc] Close";
+                        let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                        let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
                         self.renderer.draw_text(
                             &mut buffer,
                             width,
                             height,
-                            modal_x + modal_w - (100.0 * scale),
+                            esc_x,
                             head_text_y,
-                            "[Esc] Close",
+                            esc_label,
                             0x00787C99,
                         );
 
@@ -1803,17 +1826,67 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             footer_h as usize,
                             0x001F2335,
                         );
-
-                        let footer_text_y = footer_y + ((footer_h - self.renderer.cell_height) * 0.5).max(0.0);
-                        self.renderer.draw_text(
+                        // Subtle top border for footer
+                        TextRenderer::draw_rect(
                             &mut buffer,
                             width,
                             height,
-                            modal_x + (16.0 * scale),
-                            footer_text_y,
-                            "[n] New   [r] Rename   [d] Delete   [w] Open in Window   [Enter] Switch",
-                            0x007AA2F7,
+                            modal_x as usize,
+                            footer_y as usize,
+                            modal_w as usize,
+                            1,
+                            0x00292E42,
                         );
+
+                        let modal_rect = crate::window::Rect {
+                            x: modal_x,
+                            y: modal_y,
+                            width: modal_w,
+                            height: modal_h,
+                        };
+                        let footer_buttons = crate::window::calculate_modal_buttons(
+                            modal_rect,
+                            footer_h,
+                            scale,
+                            self.renderer.cell_width,
+                        );
+
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        for btn in &footer_buttons {
+                            let is_hovered = btn.rect.contains(mx, my);
+                            let bg_color = if is_hovered { 0x00283457 } else { 0x0024283B };
+                            let border_color = if is_hovered { btn.color } else { 0x003B4261 };
+
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                btn.rect.x as usize,
+                                btn.rect.y as usize,
+                                btn.rect.width as usize,
+                                btn.rect.height as usize,
+                                bg_color,
+                            );
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (btn.rect.x as usize, btn.rect.y as usize, btn.rect.width as usize, btn.rect.height as usize),
+                                1,
+                                border_color,
+                            );
+                            let text_w = btn.label.chars().count() as f32 * self.renderer.cell_width;
+                            let text_x = btn.rect.x + ((btn.rect.width - text_w) * 0.5).max(0.0);
+                            let text_y = btn.rect.y + ((btn.rect.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                text_x,
+                                text_y,
+                                btn.label,
+                                btn.color,
+                            );
+                        }
                     }
 
                     let _ = buffer.present();
@@ -1944,4 +2017,5 @@ fn draw_outline_rect(
     TextRenderer::draw_rect(buffer, width, height, x, y, border_width, h, color);
     TextRenderer::draw_rect(buffer, width, height, x + w.saturating_sub(border_width), y, border_width, h, color);
 }
+
 

@@ -1,4 +1,4 @@
-use celerterm::window::{calculate_header_layout, Rect};
+use celerterm::window::{calculate_header_layout, calculate_modal_buttons, Rect};
 
 #[test]
 fn test_header_layout_disabled() {
@@ -50,4 +50,98 @@ fn test_rect_hit_testing() {
     assert!(!rect.contains(79.0, 10.0));
     assert!(!rect.contains(231.0, 10.0));
     assert!(!rect.contains(100.0, 31.0));
+}
+
+#[test]
+fn test_modal_buttons_fit_within_modal_no_overflow() {
+    let modal = Rect {
+        x: 100.0,
+        y: 80.0,
+        width: 580.0,
+        height: 320.0,
+    };
+    let buttons = calculate_modal_buttons(modal, 42.0, 1.0, 8.5);
+
+    assert_eq!(buttons.len(), 5);
+
+    // Verify labels
+    assert_eq!(buttons[0].id, "new");
+    assert_eq!(buttons[0].label, "[n] New");
+    assert_eq!(buttons[1].id, "rename");
+    assert_eq!(buttons[1].label, "[r] Rename");
+    assert_eq!(buttons[2].id, "delete");
+    assert_eq!(buttons[2].label, "[d] Delete");
+    assert_eq!(buttons[3].id, "window");
+    assert_eq!(buttons[3].label, "[w] Window");
+    assert_eq!(buttons[4].id, "switch");
+    assert_eq!(buttons[4].label, "[Enter] Switch");
+
+    // Verify all buttons strictly fit within modal boundaries with zero overflow
+    for btn in &buttons {
+        assert!(btn.rect.x >= modal.x, "Button {} starts to the left of modal", btn.id);
+        assert!(
+            btn.rect.x + btn.rect.width <= modal.x + modal.width,
+            "Button {} overflows modal right boundary (btn right: {}, modal right: {})",
+            btn.id,
+            btn.rect.x + btn.rect.width,
+            modal.x + modal.width
+        );
+        assert!(btn.rect.y >= modal.y, "Button {} above modal", btn.id);
+        assert!(
+            btn.rect.y + btn.rect.height <= modal.y + modal.height,
+            "Button {} below modal footer",
+            btn.id
+        );
+    }
+
+    // Verify buttons are laid out sequentially from left to right without overlap
+    for i in 0..4 {
+        assert!(
+            buttons[i].rect.x + buttons[i].rect.width <= buttons[i + 1].rect.x,
+            "Buttons {} and {} overlap",
+            buttons[i].id,
+            buttons[i + 1].id
+        );
+    }
+}
+
+#[test]
+fn test_modal_buttons_responsive_narrow_modal() {
+    // Narrow modal (e.g. 420px width)
+    let modal = Rect {
+        x: 10.0,
+        y: 20.0,
+        width: 420.0,
+        height: 280.0,
+    };
+    let buttons = calculate_modal_buttons(modal, 38.0, 1.0, 8.5);
+
+    for btn in &buttons {
+        assert!(btn.rect.x >= modal.x);
+        assert!(
+            btn.rect.x + btn.rect.width <= modal.x + modal.width,
+            "Button {} overflowed in narrow modal",
+            btn.id
+        );
+    }
+}
+
+#[test]
+fn test_modal_buttons_retina_2x_scaling() {
+    let modal = Rect {
+        x: 200.0,
+        y: 160.0,
+        width: 1160.0, // 580 * 2
+        height: 640.0,
+    };
+    let buttons = calculate_modal_buttons(modal, 84.0, 2.0, 17.0);
+
+    for btn in &buttons {
+        assert!(btn.rect.x >= modal.x);
+        assert!(
+            btn.rect.x + btn.rect.width <= modal.x + modal.width,
+            "Retina button {} overflowed",
+            btn.id
+        );
+    }
 }
