@@ -9,7 +9,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy}
 use winit::keyboard::{ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
 use crate::config::load_config;
-use crate::window::macos::{configure_macos_window, apply_traffic_lights_visibility};
+use crate::window::macos::configure_macos_window;
+#[cfg(target_os = "macos")]
+use crate::window::macos::apply_traffic_lights_visibility;
 use crate::window::tabs::calculate_header_layout;
 use crate::workspace::WorkspaceManager;
 use crate::pty::PtySession;

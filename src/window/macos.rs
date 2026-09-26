@@ -4,7 +4,7 @@ use winit::window::WindowAttributes;
 use crate::config::schema::WindowConfig;
 
 pub fn configure_macos_window(
-    mut attrs: WindowAttributes,
+    #[allow(unused_mut)] mut attrs: WindowAttributes,
     config: &WindowConfig,
     option_as_alt: bool,
 ) -> WindowAttributes {
@@ -58,6 +58,10 @@ pub fn apply_traffic_lights_visibility(window: &winit::window::Window, hide_traf
         }
     }
 }
+
+#[cfg(not(target_os = "macos"))]
+pub fn apply_traffic_lights_visibility(_window: &winit::window::Window, _hide_traffic_lights: bool) {}
+
 
 #[cfg(target_os = "macos")]
 pub fn set_macos_app_icon(png_bytes: &[u8]) {
