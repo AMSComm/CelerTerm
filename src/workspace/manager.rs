@@ -45,7 +45,7 @@ impl Workspace {
 pub struct WorkspaceManager {
     pub workspaces: Vec<Workspace>,
     pub active_workspace_id: String,
-    next_id: usize,
+    pub next_id: usize,
 }
 
 impl Default for WorkspaceManager {

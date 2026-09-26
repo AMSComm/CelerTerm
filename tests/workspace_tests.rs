@@ -415,4 +415,101 @@ fn test_workspace_delete_and_rename() {
     assert_eq!(manager.workspaces.len(), 1);
 }
 
+#[test]
+fn test_merge_workspace_managers_preserves_unowned_workspaces() {
+    use celerterm::workspace::storage::merge_workspace_managers;
+
+    // Simulate Window 1 (Main Window)
+    let mut win1 = WorkspaceManager::new();
+    win1.workspaces[0].name = "Term".to_string();
+    let tab1_id = win1.workspaces[0].tabs[0].id.clone();
+    let tab2_id = win1.new_tab(PathBuf::from("/Users/huy/work")).unwrap();
+
+    // Window 1 creates Workspace 2 (Agent) initially with 1 default tab
+    let ws2_id = win1.new_workspace("Agent").unwrap();
+    let win1_ws2_tab_id = win1.workspaces.iter().find(|w| w.id == ws2_id).unwrap().tabs[0].id.clone();
+    // Switch Window 1 back to Term
+    win1.switch_workspace("ws_default").unwrap();
+
+    // Simulate Window 2 (opened via --workspace Agent)
+    let mut win2 = win1.clone();
+    win2.switch_workspace(&ws2_id).unwrap();
+
+    // In Window 2, user works in Agent: modifies tab, changes cwd, adds another tab
+    if let Some(ws2) = win2.workspaces.iter_mut().find(|w| w.id == ws2_id) {
+        ws2.tabs[0].cwd = PathBuf::from("/Users/huy/dev/amktest");
+        ws2.tabs[0].title = "amktest".to_string();
+        ws2.tabs[0].scrollback_cache = vec!["cd dev/amktest".to_string()];
+    }
+    let win2_new_tab = win2.new_tab(PathBuf::from("/Users/huy/dev/a2")).unwrap();
+
+    // Window 2 saves to disk first
+    let win2_owned_tabs = vec![win1_ws2_tab_id.clone(), win2_new_tab.clone()];
+    let disk_snapshot = merge_workspace_managers(
+        &win2,
+        &win2_owned_tabs,
+        &[],
+        None,
+        true,
+    );
+
+    // Verify disk snapshot has updated Agent workspace (2 tabs)
+    let saved_ws2 = disk_snapshot.workspaces.iter().find(|w| w.id == ws2_id).unwrap();
+    assert_eq!(saved_ws2.tabs.len(), 2);
+    assert_eq!(saved_ws2.tabs[0].cwd, PathBuf::from("/Users/huy/dev/amktest"));
+
+    // Now Window 1 closes LATER. Window 1 only owns tab1 and tab2 from Term.
+    // Window 1's memory of Agent is still the stale 1-tab version.
+    let win1_owned_tabs = vec![tab1_id.clone(), tab2_id.clone()];
+    let final_merged = merge_workspace_managers(
+        &win1,
+        &win1_owned_tabs,
+        &[],
+        Some(&disk_snapshot),
+        false,
+    );
+
+    // CRITICAL ASSERTION: Window 1 must NOT overwrite Window 2's Agent workspace!
+    assert_eq!(final_merged.workspaces.len(), 2);
+
+    let final_term = final_merged.workspaces.iter().find(|w| w.id == "ws_default").unwrap();
+    assert_eq!(final_term.tabs.len(), 2, "Window 1's Term workspace must be fully preserved");
+
+    let final_agent = final_merged.workspaces.iter().find(|w| w.id == ws2_id).unwrap();
+    assert_eq!(final_agent.tabs.len(), 2, "Window 2's Agent workspace must NOT be overwritten by Window 1's stale memory");
+    assert_eq!(final_agent.tabs[0].cwd, PathBuf::from("/Users/huy/dev/amktest"));
+    assert_eq!(final_agent.tabs[0].title, "amktest");
+    assert_eq!(final_agent.tabs[0].scrollback_cache, vec!["cd dev/amktest".to_string()]);
+    assert_eq!(final_agent.tabs[1].cwd, PathBuf::from("/Users/huy/dev/a2"));
+
+    // Main window was active on Term, so active_workspace_id should be ws_default
+    assert_eq!(final_merged.active_workspace_id, "ws_default");
+}
+
+#[test]
+fn test_merge_workspace_managers_respects_deletions_and_adds_external() {
+    use celerterm::workspace::storage::merge_workspace_managers;
+
+    let mut disk_mgr = WorkspaceManager::new();
+    let ws2_id = disk_mgr.new_workspace("Obsolete").unwrap();
+    let ws3_id = disk_mgr.new_workspace("External From Win2").unwrap();
+
+    let current_mgr = WorkspaceManager::new();
+    // current_mgr deleted ws2
+    let deleted_ids = vec![ws2_id.clone()];
+
+    let merged = merge_workspace_managers(
+        &current_mgr,
+        &["tab_1".to_string()],
+        &deleted_ids,
+        Some(&disk_mgr),
+        false,
+    );
+
+    // Obsolete workspace should NOT be in merged
+    assert!(!merged.workspaces.iter().any(|w| w.id == ws2_id));
+    // External workspace from disk should be preserved
+    assert!(merged.workspaces.iter().any(|w| w.id == ws3_id));
+}
+
 

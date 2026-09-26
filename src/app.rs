@@ -123,6 +123,8 @@ pub struct CelerApp {
     scale_factor: f32,
     cols: usize,
     rows: usize,
+    is_secondary_window: bool,
+    deleted_workspace_ids: Vec<String>,
 }
 
 impl Default for CelerApp {
@@ -155,11 +157,13 @@ impl CelerApp {
 
         // Support --workspace <name> CLI flag to open directly into a named workspace
         let mut target_ws = None;
+        let mut is_secondary_window = false;
         let args: Vec<String> = std::env::args().collect();
         let mut i = 1;
         while i < args.len() {
             if (args[i] == "--workspace" || args[i] == "-w") && i + 1 < args.len() {
                 target_ws = Some(args[i + 1].clone());
+                is_secondary_window = true;
                 i += 2;
             } else {
                 i += 1;
@@ -202,6 +206,8 @@ impl CelerApp {
             scale_factor: 1.0,
             cols,
             rows,
+            is_secondary_window,
+            deleted_workspace_ids: Vec::new(),
         }
     }
 
@@ -322,10 +328,39 @@ impl CelerApp {
 
     pub fn ensure_tab_session(&mut self, tab_id: &str) {
         if !self.tab_sessions.contains_key(tab_id) {
-            let cwd = self.workspace_mgr.get_active_workspace()
-                .and_then(|ws| ws.tabs.iter().find(|t| t.id == tab_id))
+            let cwd = self.workspace_mgr.workspaces.iter()
+                .find_map(|ws| ws.tabs.iter().find(|t| t.id == tab_id))
                 .map(|t| t.cwd.clone());
             let _ = self.spawn_tab_session(tab_id, cwd.as_deref());
+        }
+    }
+
+    pub fn activate_current_workspace_sessions(&mut self) {
+        if let Some(ws) = self.workspace_mgr.get_active_workspace() {
+            let tab_ids: Vec<String> = ws.tabs.iter().map(|t| t.id.clone()).collect();
+            for tab_id in tab_ids {
+                self.ensure_tab_session(&tab_id);
+            }
+        }
+    }
+
+    pub fn sync_workspace_from_disk_if_unowned(&mut self, workspace_id: &str) {
+        let has_active_sessions = self.workspace_mgr.workspaces.iter()
+            .find(|w| w.id == workspace_id)
+            .map(|w| w.tabs.iter().any(|t| self.tab_sessions.contains_key(&t.id)))
+            .unwrap_or(false);
+
+        if !has_active_sessions {
+            if let Some(path) = crate::workspace::get_default_snapshot_path()
+                && path.exists()
+                && let Ok(disk) = crate::workspace::load_snapshot_from_file(&path)
+                && let Some(disk_ws) = disk.workspaces.into_iter().find(|w| w.id == workspace_id)
+            {
+                if let Some(existing) = self.workspace_mgr.workspaces.iter_mut().find(|w| w.id == workspace_id) {
+                    *existing = disk_ws;
+                }
+                self.workspace_mgr.next_id = self.workspace_mgr.next_id.max(disk.next_id);
+            }
         }
     }
 
@@ -388,6 +423,13 @@ impl CelerApp {
                         && let Some(cwd) = crate::pty::get_process_cwd(child_pid)
                     {
                         tab.cwd = cwd;
+                        let fg_pid = session.foreground_process_id();
+                        let proc_name = if let Some(fpid) = fg_pid && child_pid != fpid && fpid > 0 {
+                            crate::pty::get_process_name(fpid)
+                        } else {
+                            None
+                        };
+                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd));
                     }
                     if save_scrollback {
                         tab.scrollback_cache = session.screen.get_scrollback_lines(max_lines);
@@ -397,7 +439,23 @@ impl CelerApp {
         }
 
         if let Some(path) = crate::workspace::get_default_snapshot_path() {
-            if let Err(e) = crate::workspace::save_snapshot_to_file(&self.workspace_mgr, &path) {
+            let disk_manager = if path.exists() {
+                crate::workspace::load_snapshot_from_file(&path).ok()
+            } else {
+                None
+            };
+
+            let owned_tabs: Vec<String> = self.tab_sessions.keys().cloned().collect();
+            let merged = crate::workspace::merge_workspace_managers(
+                &self.workspace_mgr,
+                &owned_tabs,
+                &self.deleted_workspace_ids,
+                disk_manager.as_ref(),
+                self.is_secondary_window,
+            );
+            self.workspace_mgr.next_id = merged.next_id;
+
+            if let Err(e) = crate::workspace::save_snapshot_to_file(&merged, &path) {
                 log::warn!("Failed to save workspace snapshot: {e}");
             } else {
                 info!("Saved workspace snapshot to {}", path.display());
@@ -481,10 +539,9 @@ impl CelerApp {
                         let idx = self.workspace_modal.selected_index;
                         if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                             let target_id = ws.id.clone();
+                            self.sync_workspace_from_disk_if_unowned(&target_id);
                             let _ = self.workspace_mgr.switch_workspace(&target_id);
-                            if let Some(active_id) = self.active_tab_id() {
-                                self.ensure_tab_session(&active_id);
-                            }
+                            self.activate_current_workspace_sessions();
                             self.save_workspace_state();
                         }
                         self.workspace_modal.is_open = false;
@@ -505,11 +562,10 @@ impl CelerApp {
                                     let idx = self.workspace_modal.selected_index;
                                     if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                         let target_id = ws.id.clone();
+                                        self.deleted_workspace_ids.push(target_id.clone());
                                         let _ = self.workspace_mgr.delete_workspace(&target_id);
                                         self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
-                                        if let Some(active_id) = self.active_tab_id() {
-                                            self.ensure_tab_session(&active_id);
-                                        }
+                                        self.activate_current_workspace_sessions();
                                         self.save_workspace_state();
                                     }
                                 }
@@ -539,10 +595,9 @@ impl CelerApp {
                                     && num >= 1 && num <= self.workspace_mgr.workspaces.len()
                                 {
                                     let target_id = self.workspace_mgr.workspaces[num - 1].id.clone();
+                                    self.sync_workspace_from_disk_if_unowned(&target_id);
                                     let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                    if let Some(active_id) = self.active_tab_id() {
-                                        self.ensure_tab_session(&active_id);
-                                    }
+                                    self.activate_current_workspace_sessions();
                                     self.save_workspace_state();
                                     self.workspace_modal.is_open = false;
                                 }
@@ -792,15 +847,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 };
 
                 // Spawn sessions for all tabs in the active workspace
-                let tabs_to_spawn: Vec<(String, PathBuf)> = self.workspace_mgr.get_active_workspace()
-                    .map(|ws| ws.tabs.iter().map(|t| (t.id.clone(), t.cwd.clone())).collect())
-                    .unwrap_or_default();
-
-                for (tab_id, cwd) in tabs_to_spawn {
-                    if let Err(e) = self.spawn_tab_session(&tab_id, Some(&cwd)) {
-                        eprintln!("Failed to spawn tab PTY {tab_id}: {e}");
-                    }
-                }
+                self.activate_current_workspace_sessions();
 
                 self.surface = Some(surface);
                 self.window = Some(window);
@@ -1083,10 +1130,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     if self.workspace_modal.selected_index == clicked_idx {
                                         // Clicking selected row switches to it
                                         let target_id = self.workspace_mgr.workspaces[clicked_idx].id.clone();
+                                        self.sync_workspace_from_disk_if_unowned(&target_id);
                                         let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                        if let Some(active_id) = self.active_tab_id() {
-                                            self.ensure_tab_session(&active_id);
-                                        }
+                                        self.activate_current_workspace_sessions();
                                         self.save_workspace_state();
                                         self.workspace_modal.is_open = false;
                                     } else {
@@ -1132,11 +1178,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                                 let idx = self.workspace_modal.selected_index;
                                                 if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                                     let target_id = ws.id.clone();
+                                                    self.deleted_workspace_ids.push(target_id.clone());
                                                     let _ = self.workspace_mgr.delete_workspace(&target_id);
                                                     self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
-                                                    if let Some(active_id) = self.active_tab_id() {
-                                                        self.ensure_tab_session(&active_id);
-                                                    }
+                                                    self.activate_current_workspace_sessions();
                                                     self.save_workspace_state();
                                                 }
                                             }
@@ -1161,10 +1206,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                             let idx = self.workspace_modal.selected_index;
                                             if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                                 let target_id = ws.id.clone();
+                                                self.sync_workspace_from_disk_if_unowned(&target_id);
                                                 let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                                if let Some(active_id) = self.active_tab_id() {
-                                                    self.ensure_tab_session(&active_id);
-                                                }
+                                                self.activate_current_workspace_sessions();
                                                 self.save_workspace_state();
                                             }
                                             self.workspace_modal.is_open = false;
@@ -1430,9 +1474,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::PreviousWorkspace => {
                             if self.workspace_mgr.previous_workspace().is_ok() {
-                                if let Some(active_id) = self.active_tab_id() {
-                                    self.ensure_tab_session(&active_id);
-                                }
+                                let active_ws_id = self.workspace_mgr.active_workspace_id.clone();
+                                self.sync_workspace_from_disk_if_unowned(&active_ws_id);
+                                self.activate_current_workspace_sessions();
                                 self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
@@ -1441,9 +1485,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::NextWorkspace => {
                             if self.workspace_mgr.next_workspace().is_ok() {
-                                if let Some(active_id) = self.active_tab_id() {
-                                    self.ensure_tab_session(&active_id);
-                                }
+                                let active_ws_id = self.workspace_mgr.active_workspace_id.clone();
+                                self.sync_workspace_from_disk_if_unowned(&active_ws_id);
+                                self.activate_current_workspace_sessions();
                                 self.save_workspace_state();
                                 if let Some(ref win) = window {
                                     win.request_redraw();
