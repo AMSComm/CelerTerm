@@ -23,6 +23,7 @@ pub enum KeyAction {
     NextWorkspace,
     ToggleWorkspaceModal,
     ReloadConfig,
+    CheckForUpdates,
     Paste,
     Copy,
     ClearScreen,
@@ -51,6 +52,7 @@ pub fn translate_key_event(
                     "}" | "]" => return Some(KeyAction::NextWorkspace),
                     "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
                     "R" | "r" => return Some(KeyAction::ReloadConfig),
+                    "U" | "u" => return Some(KeyAction::CheckForUpdates),
                     _ => {}
                 }
             }
@@ -94,6 +96,7 @@ pub fn translate_key_event(
             "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
             "R" | "r" => return Some(KeyAction::ReloadConfig),
             "N" | "n" => return Some(KeyAction::NewWorkspace),
+            "U" | "u" => return Some(KeyAction::CheckForUpdates),
             _ => {}
         }
     }

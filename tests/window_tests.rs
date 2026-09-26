@@ -145,3 +145,15 @@ fn test_modal_buttons_retina_2x_scaling() {
         );
     }
 }
+
+#[test]
+fn test_header_layout_menu_button() {
+    let tabs = vec![("t1".to_string(), "Shell".to_string())];
+    let layout = calculate_header_layout(800.0, &tabs, false, true, 1.0, 8.0);
+
+    assert!(layout.menu_button_rect.width > 0.0);
+    assert!(layout.menu_button_rect.height > 0.0);
+    assert!(layout.menu_button_rect.x + layout.menu_button_rect.width <= 800.0);
+    assert!(layout.menu_button_rect.x > layout.add_button_rect.x);
+}
+

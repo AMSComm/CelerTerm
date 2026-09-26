@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS Installer
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package macOS App Bundle
+        run: |
+          mkdir -p CelerTerm.app/Contents/MacOS
+          mkdir -p CelerTerm.app/Contents/Resources
+          cp target/release/celerterm CelerTerm.app/Contents/MacOS/celerterm
+          chmod +x CelerTerm.app/Contents/MacOS/celerterm
+          cp assets/Info.plist CelerTerm.app/Contents/Info.plist
+          cp assets/AppIcon.icns CelerTerm.app/Contents/Resources/AppIcon.icns
+
+      - name: Create DMG and ZIP
+        run: |
+          zip -r CelerTerm-macOS.app.zip CelerTerm.app
+          mkdir -p dmg_root
+          cp -R CelerTerm.app dmg_root/
+          ln -s /Applications dmg_root/Applications
+          hdiutil create -volname "CelerTerm" -srcfolder dmg_root -ov -format UDZO CelerTerm-macOS.dmg
+
+      - name: Upload macOS Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            CelerTerm-macOS.dmg
+            CelerTerm-macOS.app.zip
+
+  build-linux:
+    name: Build Linux Packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libxcb-xfixes0-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Package tar.gz
+        run: |
+          mkdir -p celerterm-linux-x86_64
+          cp target/release/celerterm celerterm-linux-x86_64/
+          cp assets/celerterm.desktop celerterm-linux-x86_64/
+          cp assets/icon.png celerterm-linux-x86_64/celerterm.png
+          cp README.md CHANGELOG.md celerterm-linux-x86_64/
+          tar -czvf celerterm-linux-x86_64.tar.gz celerterm-linux-x86_64
+
+      - name: Package Debian .deb
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          DEB_DIR="celerterm_${VERSION}_amd64"
+          mkdir -p "${DEB_DIR}/DEBIAN"
+          mkdir -p "${DEB_DIR}/usr/bin"
+          mkdir -p "${DEB_DIR}/usr/share/applications"
+          mkdir -p "${DEB_DIR}/usr/share/icons/hicolor/512x512/apps"
+          cp target/release/celerterm "${DEB_DIR}/usr/bin/"
+          cp assets/celerterm.desktop "${DEB_DIR}/usr/share/applications/"
+          cp assets/icon.png "${DEB_DIR}/usr/share/icons/hicolor/512x512/apps/celerterm.png"
+          cat <<EOF > "${DEB_DIR}/DEBIAN/control"
+          Package: celerterm
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Huy <huy@celerterm.local>
+          Description: A high-performance minimalist GPU-accelerated terminal emulator
+          EOF
+          dpkg-deb --build "${DEB_DIR}" "celerterm_${VERSION}_amd64.deb"
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            celerterm-linux-x86_64.tar.gz
+            *.deb
+
+  release:
+    name: Create GitHub Release
+    needs: [build-macos, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract Release Notes from CHANGELOG
+        run: |
+          python3 -c "
+          import sys
+          with open('CHANGELOG.md', 'r', encoding='utf-8') as f:
+              lines = f.readlines()
+          tag = '${{ github.ref_name }}'
+          ver = tag.lstrip('v')
+          capturing = False
+          body = []
+          for line in lines:
+              if line.startswith('## ['):
+                  if ver in line:
+                      capturing = True
+                      continue
+                  elif capturing:
+                      break
+              elif capturing:
+                  body.append(line)
+          notes = ''.join(body).strip()
+          with open('RELEASE_NOTES.md', 'w', encoding='utf-8') as out:
+              out.write(notes if notes else f'Release {tag}')
+          "
+
+      - name: Publish Release to GitHub
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            artifacts/macos-artifacts/*
+            artifacts/linux-artifacts/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

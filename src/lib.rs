@@ -5,3 +5,4 @@ pub mod workspace;
 pub mod window;
 pub mod renderer;
 pub mod app;
+pub mod update;

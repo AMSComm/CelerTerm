@@ -27,6 +27,7 @@ pub enum UserEvent {
     PtyExited {
         tab_id: String,
     },
+    UpdateCheckResult(Result<Option<crate::update::ReleaseInfo>, String>),
 }
 
 pub struct TabSession {
@@ -84,12 +85,31 @@ impl Default for WorkspaceModalState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UpdateModalState {
+    pub is_open: bool,
+    pub state: crate::update::UpdateState,
+    pub scroll_offset: usize,
+}
+
+impl Default for UpdateModalState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            state: crate::update::UpdateState::Idle,
+            scroll_offset: 0,
+        }
+    }
+}
+
 pub struct CelerApp {
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     config: crate::config::Config,
     workspace_mgr: WorkspaceManager,
     workspace_modal: WorkspaceModalState,
+    update_modal: UpdateModalState,
+    app_menu_open: bool,
     tab_sessions: HashMap<String, TabSession>,
     renderer: TextRenderer,
     modifiers: ModifiersState,
@@ -167,6 +187,8 @@ impl CelerApp {
             config,
             workspace_mgr,
             workspace_modal: WorkspaceModalState::default(),
+            update_modal: UpdateModalState::default(),
+            app_menu_open: false,
             tab_sessions: HashMap::new(),
             renderer,
             modifiers: ModifiersState::default(),
@@ -529,11 +551,85 @@ impl CelerApp {
             }
         }
     }
+
+    pub fn start_check_for_updates(&mut self) {
+        self.update_modal.is_open = true;
+        self.update_modal.state = crate::update::UpdateState::Checking;
+        self.update_modal.scroll_offset = 0;
+        if let Some(ref win) = self.window {
+            win.request_redraw();
+        }
+        if let Some(ref proxy) = self.proxy {
+            let proxy = proxy.clone();
+            std::thread::spawn(move || {
+                let res = crate::update::fetch_latest_release(crate::update::GITHUB_REPO);
+                let _ = proxy.send_event(UserEvent::UpdateCheckResult(res));
+            });
+        }
+    }
+
+    fn handle_update_modal_key(&mut self, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
+        match key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                self.update_modal.is_open = false;
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                if let crate::update::UpdateState::Available { ref html_url, .. } = self.update_modal.state {
+                    crate::update::open_browser(html_url);
+                } else {
+                    self.start_check_for_updates();
+                }
+            }
+            winit::keyboard::Key::Character(s) if s.eq_ignore_ascii_case("g") => {
+                crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp)
+            | winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
+                self.update_modal.scroll_offset = self.update_modal.scroll_offset.saturating_sub(1);
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown)
+            | winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
+                self.update_modal.scroll_offset += 1;
+            }
+            _ => {}
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for CelerApp {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
+            UserEvent::UpdateCheckResult(res) => {
+                match res {
+                    Ok(Some(info)) => {
+                        let ordering = crate::update::compare_versions(crate::update::CURRENT_VERSION, &info.tag_name);
+                        if ordering == std::cmp::Ordering::Less {
+                            self.update_modal.state = crate::update::UpdateState::Available {
+                                current_version: crate::update::CURRENT_VERSION.to_string(),
+                                latest_version: info.tag_name,
+                                html_url: info.html_url,
+                                notes: info.body,
+                                published_at: info.published_at,
+                            };
+                        } else {
+                            self.update_modal.state = crate::update::UpdateState::UpToDate {
+                                current_version: crate::update::CURRENT_VERSION.to_string(),
+                            };
+                        }
+                    }
+                    Ok(None) => {
+                        self.update_modal.state = crate::update::UpdateState::UpToDate {
+                            current_version: crate::update::CURRENT_VERSION.to_string(),
+                        };
+                    }
+                    Err(err) => {
+                        self.update_modal.state = crate::update::UpdateState::Error(err);
+                    }
+                }
+                if let Some(ref window) = self.window {
+                    window.request_redraw();
+                }
+            }
             UserEvent::PtyOutput { tab_id, bytes } => {
                 if let Some(session) = self.tab_sessions.get_mut(&tab_id) {
                     session.screen.process_bytes(&bytes);
@@ -650,7 +746,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
-                if self.workspace_modal.is_open
+                if (self.workspace_modal.is_open || self.update_modal.is_open || self.app_menu_open)
                     && let Some(ref win) = self.window
                 {
                     win.request_redraw();
@@ -712,6 +808,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     winit::event::MouseScrollDelta::LineDelta(_x, y) => y.round() as i32,
                     winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0).round() as i32,
                 };
+                if self.update_modal.is_open {
+                    if lines > 0 {
+                        self.update_modal.scroll_offset = self.update_modal.scroll_offset.saturating_sub(lines.unsigned_abs() as usize);
+                    } else if lines < 0 {
+                        self.update_modal.scroll_offset += lines.unsigned_abs() as usize;
+                    }
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
                 if lines != 0
                     && let Some(active_id) = self.active_tab_id()
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
@@ -759,6 +866,78 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 if let Some(ref window) = window {
                     let size = window.inner_size();
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+
+                    if self.update_modal.is_open {
+                        if button == MouseButton::Left {
+                            let (width, height) = (size.width as f32, size.height as f32);
+                            let scale = self.scale_factor;
+                            let modal_w = (520.0 * scale).min(width - 32.0);
+                            let header_h = (36.0 * scale).round();
+                            let footer_h = (42.0 * scale).round();
+                            let content_h = (200.0 * scale).round();
+                            let modal_h = header_h + content_h + footer_h;
+
+                            let modal_x = ((width - modal_w) * 0.5).max(10.0);
+                            let modal_y = ((height - modal_h) * 0.5).max(10.0);
+
+                            // Outside modal -> close
+                            if mx < modal_x || mx > modal_x + modal_w || my < modal_y || my > modal_y + modal_h {
+                                self.update_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // Header close button [Esc] Close
+                            let esc_label = "[Esc] Close";
+                            let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                            let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
+                            if my >= modal_y && my <= modal_y + header_h && mx >= esc_x {
+                                self.update_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // Footer buttons
+                            let modal_rect = crate::window::Rect {
+                                x: modal_x,
+                                y: modal_y,
+                                width: modal_w,
+                                height: modal_h,
+                            };
+                            let is_available = matches!(self.update_modal.state, crate::update::UpdateState::Available { .. });
+                            let buttons = crate::window::calculate_update_modal_buttons(
+                                modal_rect,
+                                footer_h,
+                                scale,
+                                self.renderer.cell_width,
+                                is_available,
+                            );
+
+                            for btn in &buttons {
+                                if btn.rect.contains(mx, my) {
+                                    match btn.id {
+                                        "primary" => {
+                                            if let crate::update::UpdateState::Available { ref html_url, .. } = self.update_modal.state {
+                                                crate::update::open_browser(html_url);
+                                            } else {
+                                                self.start_check_for_updates();
+                                            }
+                                        }
+                                        "github" => {
+                                            crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
+                                        }
+                                        "close" => {
+                                            self.update_modal.is_open = false;
+                                        }
+                                        _ => {}
+                                    }
+                                    window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+                        return;
+                    }
 
                     if self.workspace_modal.is_open {
                         if button == MouseButton::Left {
@@ -916,6 +1095,54 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         self.renderer.cell_width,
                     );
 
+                    if self.app_menu_open && button == MouseButton::Left {
+                        let scale = self.scale_factor;
+                        let menu_w = (220.0 * scale).round();
+                        let item_h = (28.0 * scale).round();
+                        let menu_pad = (6.0 * scale).round();
+                        let menu_h = (5.0 * item_h) + (menu_pad * 2.0);
+                        let menu_btn = header.menu_button_rect;
+                        let menu_x = (menu_btn.x + menu_btn.width - menu_w).max(8.0 * scale);
+                        let menu_y = header.height + (2.0 * scale);
+
+                        if mx >= menu_x && mx <= menu_x + menu_w && my >= menu_y && my <= menu_y + menu_h {
+                            let item_idx = ((my - (menu_y + menu_pad)) / item_h).floor() as usize;
+                            self.app_menu_open = false;
+                            match item_idx {
+                                0 => {
+                                    self.start_check_for_updates();
+                                }
+                                1 => {
+                                    self.workspace_modal.is_open = true;
+                                    self.workspace_modal.mode = WorkspaceModalMode::List;
+                                    if let Some(pos) = self.workspace_mgr.workspaces.iter().position(|w| w.id == self.workspace_mgr.active_workspace_id) {
+                                        self.workspace_modal.selected_index = pos;
+                                    }
+                                }
+                                2 => {
+                                    self.reload_config();
+                                }
+                                3 => {
+                                    crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
+                                }
+                                4 => {
+                                    self.update_modal.is_open = true;
+                                    self.update_modal.state = crate::update::UpdateState::UpToDate {
+                                        current_version: crate::update::CURRENT_VERSION.to_string(),
+                                    };
+                                }
+                                _ => {}
+                            }
+                            window.request_redraw();
+                            return;
+                        } else {
+                            self.app_menu_open = false;
+                            if !header.menu_button_rect.contains(mx, my) {
+                                window.request_redraw();
+                            }
+                        }
+                    }
+
                     // Check click in header
                     if my <= header.height {
                         let mut clicked_tab = false;
@@ -954,11 +1181,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
 
+                        // Check click on ☰ Menu Button
+                        if !clicked_tab && button == MouseButton::Left && header.menu_button_rect.contains(mx, my) {
+                            self.app_menu_open = !self.app_menu_open;
+                            window.request_redraw();
+                            return;
+                        }
+
                         // Check click on Workspace name badge
                         let ws_name = self.workspace_mgr.get_active_workspace().map(|w| w.name.as_str()).unwrap_or("Default");
                         let ws_w = ws_name.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
                         let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
-                        let ws_x = (size.width as f32) - ws_w - (12.0 * self.scale_factor);
+                        let ws_x = header.menu_button_rect.x - ws_w - (8.0 * self.scale_factor);
                         let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
                         let ws_rect = crate::window::tabs::Rect { x: ws_x, y: ws_y, width: ws_w, height: ws_h };
 
@@ -996,11 +1230,32 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             } => {
                 let window = self.window.clone();
 
+                if self.update_modal.is_open {
+                    self.handle_update_modal_key(&logical_key, match physical_key {
+                        PhysicalKey::Code(c) => Some(c),
+                        _ => None,
+                    });
+                    if let Some(ref win) = window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 if self.workspace_modal.is_open {
                     self.handle_modal_key(&logical_key, match physical_key {
                         PhysicalKey::Code(c) => Some(c),
                         _ => None,
                     });
+                    if let Some(ref win) = window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
+                if self.app_menu_open
+                    && matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape))
+                {
+                    self.app_menu_open = false;
                     if let Some(ref win) = window {
                         win.request_redraw();
                     }
@@ -1107,6 +1362,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::ReloadConfig => {
                             self.reload_config();
+                        }
+                        KeyAction::CheckForUpdates => {
+                            self.start_check_for_updates();
                         }
                         KeyAction::SelectTab(idx) => {
                             if let Ok(tab_id) = self.workspace_mgr.select_tab_by_1_index(idx) {
@@ -1301,13 +1559,45 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             0x0016161E,
                         );
 
-                        // Draw Workspace Indicator badge on the right (clean name without [WS: ])
+                        // Draw ☰ Menu Button on the far right
+                        let menu_rect = header.menu_button_rect;
+                        if menu_rect.width > 0.0 {
+                            let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                            let is_hovered = menu_rect.contains(mx, my) || self.app_menu_open;
+                            let menu_bg = if is_hovered { 0x00283457 } else { 0x001F2335 };
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                menu_rect.x as usize,
+                                menu_rect.y as usize,
+                                menu_rect.width as usize,
+                                menu_rect.height as usize,
+                                menu_bg,
+                            );
+                            let icon = "☰";
+                            let icon_x = menu_rect.x + ((menu_rect.width - self.renderer.cell_width) * 0.5).max(0.0);
+                            let icon_y = menu_rect.y + ((menu_rect.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                icon_x,
+                                icon_y,
+                                icon,
+                                if is_hovered { 0x007AA2F7 } else { 0x00A9B1D6 },
+                            );
+                        }
+
+                        // Draw Workspace Indicator badge to the left of the menu button
                         let ws_label = active_ws_name.to_string();
                         let ws_w = ws_label.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
                         let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
-                        let ws_x = (width as f32) - ws_w - (12.0 * self.scale_factor);
+                        let ws_x = menu_rect.x - ws_w - (8.0 * self.scale_factor);
                         let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
                         if ws_x > header.add_button_rect.x + (30.0 * self.scale_factor) {
+                            let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                            let is_hovered = mx >= ws_x && mx <= ws_x + ws_w && my >= ws_y && my <= ws_y + ws_h;
                             TextRenderer::draw_rect(
                                 &mut buffer,
                                 width,
@@ -1316,7 +1606,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 ws_y as usize,
                                 ws_w as usize,
                                 ws_h as usize,
-                                0x001F2335,
+                                if is_hovered { 0x00283457 } else { 0x001F2335 },
                             );
                             let text_x = ws_x + (8.0 * self.scale_factor);
                             let text_y = ws_y + ((ws_h - self.renderer.cell_height) * 0.5).max(0.0);
@@ -1643,8 +1933,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                     }
 
-                    // 4. Render Workspace Management Modal if open
-                    if self.workspace_modal.is_open {
+                    // 4. Dim backdrop if any modal is open
+                    if self.workspace_modal.is_open || self.update_modal.is_open {
                         // Dim backdrop (50% opacity blend)
                         for pixel in buffer.iter_mut() {
                             let p = *pixel;
@@ -1653,6 +1943,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let b = (p & 0xFF) / 3;
                             *pixel = (r << 16) | (g << 8) | b;
                         }
+                    }
+
+                    // Render Workspace Management Modal if open
+                    if self.workspace_modal.is_open {
 
                         let scale = self.scale_factor;
                         let modal_w = (580.0 * scale).min(width as f32 - 32.0);
@@ -1886,6 +2180,454 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 btn.label,
                                 btn.color,
                             );
+                        }
+                    }
+
+                    // 5. Render Software Update Modal if open
+                    if self.update_modal.is_open {
+                        let scale = self.scale_factor;
+                        let modal_w = (520.0 * scale).min(width as f32 - 32.0);
+                        let header_h = (36.0 * scale).round();
+                        let footer_h = (42.0 * scale).round();
+                        let content_h = (200.0 * scale).round();
+                        let modal_h = header_h + content_h + footer_h;
+
+                        let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
+                        let modal_y = ((height as f32 - modal_h) * 0.5).max(10.0);
+
+                        // Modal background (#1A1B26)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            modal_h as usize,
+                            0x001A1B26,
+                        );
+
+                        // Modal border (#3B4261, 1px)
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+
+                        // Header strip (#24283B)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            header_h as usize,
+                            0x0024283B,
+                        );
+                        let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + (16.0 * scale),
+                            head_text_y,
+                            "Check for Updates",
+                            0x00C0CAF5,
+                        );
+                        let esc_label = "[Esc] Close";
+                        let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                        let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            esc_x,
+                            head_text_y,
+                            esc_label,
+                            0x00787C99,
+                        );
+
+                        // Content Body
+                        let body_top = modal_y + header_h + (16.0 * scale);
+                        let body_x = modal_x + (20.0 * scale);
+                        let line_h = self.renderer.cell_height + (6.0 * scale);
+
+                        match &self.update_modal.state {
+                            crate::update::UpdateState::Idle | crate::update::UpdateState::Checking => {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top,
+                                    "Checking for updates...",
+                                    0x007AA2F7,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + line_h,
+                                    &format!("Connecting to GitHub ({})", crate::update::GITHUB_REPO),
+                                    0x00565F89,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 2.0),
+                                    &format!("Current version: v{}", crate::update::CURRENT_VERSION),
+                                    0x00C0CAF5,
+                                );
+                            }
+                            crate::update::UpdateState::UpToDate { current_version } => {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top,
+                                    "✔ CelerTerm is up to date!",
+                                    0x009ECE6A,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + line_h,
+                                    &format!("You are running the latest version: v{}", current_version),
+                                    0x00C0CAF5,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 2.0),
+                                    "No new updates are available at this time.",
+                                    0x00787C99,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 3.5),
+                                    &format!("Repository: https://github.com/{}", crate::update::GITHUB_REPO),
+                                    0x00565F89,
+                                );
+                            }
+                            crate::update::UpdateState::Available {
+                                current_version,
+                                latest_version,
+                                notes,
+                                published_at,
+                                ..
+                            } => {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top,
+                                    "🚀 New version available!",
+                                    0x007AA2F7,
+                                );
+                                let ver_info = format!("Current: v{}  ➜  Latest: {}", current_version, latest_version);
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + line_h,
+                                    &ver_info,
+                                    0x009ECE6A,
+                                );
+                                if let Some(date) = published_at {
+                                    let date_short = date.split('T').next().unwrap_or(date);
+                                    let date_str = format!("Released: {}", date_short);
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        body_x + (ver_info.len() as f32 * self.renderer.cell_width) + (16.0 * scale),
+                                        body_top + line_h,
+                                        &date_str,
+                                        0x00565F89,
+                                    );
+                                }
+
+                                // Release notes frame
+                                let notes_box_y = body_top + (line_h * 2.2);
+                                let notes_box_w = modal_w - (40.0 * scale);
+                                let notes_box_h = content_h - (line_h * 2.5) - (8.0 * scale);
+
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x as usize,
+                                    notes_box_y as usize,
+                                    notes_box_w as usize,
+                                    notes_box_h as usize,
+                                    0x0016161E,
+                                );
+                                draw_outline_rect(
+                                    &mut buffer,
+                                    (width, height),
+                                    (body_x as usize, notes_box_y as usize, notes_box_w as usize, notes_box_h as usize),
+                                    1,
+                                    0x00292E42,
+                                );
+
+                                let visible_lines = (notes_box_h / self.renderer.cell_height).floor() as usize;
+                                let lines: Vec<&str> = notes.lines().collect();
+                                let max_offset = lines.len().saturating_sub(visible_lines);
+                                let offset = self.update_modal.scroll_offset.min(max_offset);
+
+                                for (i, line) in lines.iter().skip(offset).take(visible_lines).enumerate() {
+                                    let ly = notes_box_y + (4.0 * scale) + (i as f32 * self.renderer.cell_height);
+                                    let line_w = line.len() as f32 * self.renderer.cell_width;
+                                    let avail_text_w = notes_box_w - (12.0 * scale);
+                                    let display_str = if line_w > avail_text_w {
+                                        let max_chars = (avail_text_w / self.renderer.cell_width).floor() as usize;
+                                        &line[..line.char_indices().map(|(i, _)| i).nth(max_chars).unwrap_or(line.len())]
+                                    } else {
+                                        line
+                                    };
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        body_x + (6.0 * scale),
+                                        ly,
+                                        display_str,
+                                        0x00A9B1D6,
+                                    );
+                                }
+
+                                if lines.len() > visible_lines {
+                                    let scroll_hint = "▲▼ Scroll";
+                                    let sh_w = scroll_hint.len() as f32 * self.renderer.cell_width;
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        body_x + notes_box_w - sh_w - (6.0 * scale),
+                                        notes_box_y + notes_box_h - self.renderer.cell_height - (2.0 * scale),
+                                        scroll_hint,
+                                        0x00565F89,
+                                    );
+                                }
+                            }
+                            crate::update::UpdateState::Error(err) => {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top,
+                                    "✖ Update Check Failed",
+                                    0x00F7768E,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + line_h,
+                                    "Could not connect to GitHub:",
+                                    0x00C0CAF5,
+                                );
+                                let err_line = if err.len() > 50 { &err[..50] } else { err };
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 2.0),
+                                    err_line,
+                                    0x00E0AF68,
+                                );
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    body_x,
+                                    body_top + (line_h * 3.5),
+                                    "Please check your internet connection or try again later.",
+                                    0x00565F89,
+                                );
+                            }
+                        }
+
+                        // Footer toolbar
+                        let footer_y = modal_y + modal_h - footer_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            footer_y as usize,
+                            modal_w as usize,
+                            footer_h as usize,
+                            0x001F2335,
+                        );
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            footer_y as usize,
+                            modal_w as usize,
+                            1,
+                            0x00292E42,
+                        );
+
+                        let modal_rect = crate::window::Rect {
+                            x: modal_x,
+                            y: modal_y,
+                            width: modal_w,
+                            height: modal_h,
+                        };
+                        let is_available = matches!(self.update_modal.state, crate::update::UpdateState::Available { .. });
+                        let footer_buttons = crate::window::calculate_update_modal_buttons(
+                            modal_rect,
+                            footer_h,
+                            scale,
+                            self.renderer.cell_width,
+                            is_available,
+                        );
+
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        for btn in &footer_buttons {
+                            let is_hovered = btn.rect.contains(mx, my);
+                            let bg_color = if is_hovered { 0x00283457 } else { 0x0024283B };
+                            let border_color = if is_hovered { btn.color } else { 0x003B4261 };
+
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                btn.rect.x as usize,
+                                btn.rect.y as usize,
+                                btn.rect.width as usize,
+                                btn.rect.height as usize,
+                                bg_color,
+                            );
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (btn.rect.x as usize, btn.rect.y as usize, btn.rect.width as usize, btn.rect.height as usize),
+                                1,
+                                border_color,
+                            );
+                            let text_w = btn.label.chars().count() as f32 * self.renderer.cell_width;
+                            let text_x = btn.rect.x + ((btn.rect.width - text_w) * 0.5).max(0.0);
+                            let text_y = btn.rect.y + ((btn.rect.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                text_x,
+                                text_y,
+                                btn.label,
+                                btn.color,
+                            );
+                        }
+                    }
+
+                    // 6. Render Dropdown App Menu if open
+                    if self.app_menu_open {
+                        let scale = self.scale_factor;
+                        let menu_w = (220.0 * scale).round();
+                        let item_h = (28.0 * scale).round();
+                        let menu_pad = (6.0 * scale).round();
+                        let menu_btn = header.menu_button_rect;
+                        let menu_x = (menu_btn.x + menu_btn.width - menu_w).max(8.0 * scale);
+                        let menu_y = header.height + (2.0 * scale);
+                        let menu_h = (5.0 * item_h) + (menu_pad * 2.0);
+
+                        // Menu background (#1F2335)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            menu_x as usize,
+                            menu_y as usize,
+                            menu_w as usize,
+                            menu_h as usize,
+                            0x001F2335,
+                        );
+                        // Menu border (#3B4261)
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (menu_x as usize, menu_y as usize, menu_w as usize, menu_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+
+                        let (sc_u, sc_o, sc_r) = if cfg!(target_os = "macos") {
+                            ("⌘⇧U", "⌘⇧O", "⌘⇧R")
+                        } else {
+                            ("Ctrl+Shift+U", "Ctrl+Shift+O", "Ctrl+Shift+R")
+                        };
+
+                        let menu_items: [(&str, &str); 5] = [
+                            ("Check for Updates...", sc_u),
+                            ("Workspaces", sc_o),
+                            ("Reload Config", sc_r),
+                            ("GitHub Repository", ""),
+                            ("About CelerTerm", ""),
+                        ];
+
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        for (i, (label, shortcut)) in menu_items.iter().enumerate() {
+                            let item_y = menu_y + menu_pad + (i as f32 * item_h);
+                            let is_hovered = mx >= menu_x && mx <= menu_x + menu_w && my >= item_y && my < item_y + item_h;
+                            if is_hovered {
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    (menu_x + 4.0 * scale) as usize,
+                                    item_y as usize,
+                                    (menu_w - 8.0 * scale) as usize,
+                                    item_h as usize,
+                                    0x00283457,
+                                );
+                            }
+                            let text_y = item_y + ((item_h - self.renderer.cell_height) * 0.5).max(0.0);
+                            let text_color = if is_hovered { 0x007AA2F7 } else { 0x00C0CAF5 };
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                menu_x + (12.0 * scale),
+                                text_y,
+                                label,
+                                text_color,
+                            );
+                            if !shortcut.is_empty() {
+                                let sc_w = shortcut.chars().count() as f32 * self.renderer.cell_width;
+                                let sc_x = menu_x + menu_w - sc_w - (12.0 * scale);
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    sc_x,
+                                    text_y,
+                                    shortcut,
+                                    0x00565F89,
+                                );
+                            }
                         }
                     }
 

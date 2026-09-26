@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Huy <huy@celerterm.local>"]
 description = "A high-performance minimalist GPU-accelerated terminal emulator"
+repository = "https://github.com/AMSComm/CelerTerm"
+homepage = "https://github.com/AMSComm/CelerTerm"
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 alacritty_terminal = "0.24"

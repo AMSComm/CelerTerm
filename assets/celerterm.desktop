@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=CelerTerm
+GenericName=Terminal Emulator
+Comment=A high-performance minimalist GPU-accelerated terminal emulator
+Exec=celerterm %F
+Icon=celerterm
+Terminal=false
+Categories=System;TerminalEmulator;Utility;
+Keywords=terminal;shell;prompt;command;commandline;cmd;

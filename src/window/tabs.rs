@@ -17,6 +17,7 @@ pub struct TabHeaderLayout {
     pub height: f32,
     pub tab_rects: Vec<(String, Rect)>, // tab_id, bounding rect
     pub add_button_rect: Rect,
+    pub menu_button_rect: Rect,
 }
 
 pub fn calculate_header_layout(
@@ -32,6 +33,7 @@ pub fn calculate_header_layout(
             height: 0.0,
             tab_rects: Vec::new(),
             add_button_rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
+            menu_button_rect: Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 },
         };
     }
 
@@ -46,7 +48,16 @@ pub fn calculate_header_layout(
     };
 
     let btn_width = (24.0 * scale).round();
-    let available_w = (window_width - start_x - btn_width - (16.0 * scale)).max(10.0);
+    let menu_btn_w = (26.0 * scale).round();
+    let menu_btn_x = (window_width - menu_btn_w - (8.0 * scale)).round().max(0.0);
+    let menu_button_rect = Rect {
+        x: menu_btn_x,
+        y: (1.0 * scale).round(),
+        width: menu_btn_w,
+        height: height - (2.0 * scale).round(),
+    };
+
+    let available_w = (window_width - start_x - btn_width - menu_btn_w - (60.0 * scale)).max(10.0);
     let max_per_tab = (available_w / (tabs.len().max(1) as f32)).max(20.0);
 
     let mut current_x = start_x;
@@ -80,6 +91,7 @@ pub fn calculate_header_layout(
         height,
         tab_rects,
         add_button_rect,
+        menu_button_rect,
     }
 }
 
@@ -174,6 +186,76 @@ pub fn calculate_modal_buttons(
                 label: items[4].1,
                 rect: Rect { x: cur_x, y: btn_y, width: widths[4], height: btn_h },
                 color: items[4].2,
+            }
+        },
+    ]
+}
+
+pub fn calculate_update_modal_buttons(
+    modal_rect: Rect,
+    footer_h: f32,
+    scale: f32,
+    cell_w: f32,
+    is_available: bool,
+) -> [ModalButton; 3] {
+    let btn_h = (footer_h - 14.0 * scale).max(20.0);
+    let btn_y = modal_rect.y + modal_rect.height - footer_h + ((footer_h - btn_h) * 0.5);
+
+    let primary_text = if is_available { "[Enter] Download" } else { "[Enter] Check Again" };
+    let items: [(&'static str, &'static str, u32); 3] = [
+        ("primary", primary_text, 0x007AA2F7),
+        ("github", "[g] GitHub", 0x00BB9AF7),
+        ("close", "[Esc] Close", 0x00565F89),
+    ];
+
+    let pad_inner = 8.0 * scale;
+    let mut gap = 8.0 * scale;
+    let mut widths = [0.0f32; 3];
+    let mut total_w = 0.0f32;
+
+    for (i, (_, text, _)) in items.iter().enumerate() {
+        let w = (text.chars().count() as f32 * cell_w) + pad_inner * 2.0;
+        widths[i] = w;
+        total_w += w;
+    }
+    total_w += gap * 2.0;
+
+    let avail_w = modal_rect.width - (16.0 * scale);
+    if total_w > avail_w && avail_w > 100.0 {
+        let factor = avail_w / total_w;
+        for w in &mut widths {
+            *w *= factor;
+        }
+        gap *= factor;
+        total_w = avail_w;
+    }
+
+    let start_x = modal_rect.x + ((modal_rect.width - total_w) * 0.5).max(8.0 * scale);
+    let mut cur_x = start_x;
+
+    [
+        ModalButton {
+            id: items[0].0,
+            label: items[0].1,
+            rect: Rect { x: cur_x, y: btn_y, width: widths[0], height: btn_h },
+            color: items[0].2,
+        },
+        {
+            cur_x += widths[0] + gap;
+            ModalButton {
+                id: items[1].0,
+                label: items[1].1,
+                rect: Rect { x: cur_x, y: btn_y, width: widths[1], height: btn_h },
+                color: items[1].2,
+            }
+        },
+        {
+            cur_x += widths[1] + gap;
+            ModalButton {
+                id: items[2].0,
+                label: items[2].1,
+                rect: Rect { x: cur_x, y: btn_y, width: widths[2], height: btn_h },
+                color: items[2].2,
             }
         },
     ]
