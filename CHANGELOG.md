@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-09-27
+
+### Added
+
+- **Multi-Window Duplicate Workspace Prevention & Auto-Focus**:
+  - Implemented single-instance workspace ownership: prevents opening the same workspace in multiple windows simultaneously.
+  - Automatically brings existing window to the front (`focus_instance`) via Cocoa native `NSRunningApplication::activateWithOptions` on macOS and `xdotool`/`wmctrl` on Linux whenever switching to an already-open workspace (via Enter, row click, modal chip, or Next/PreviousWorkspace shortcuts).
+  - Opening a workspace in a new window (`w`/`W` key, "window" chip, or CLI `--workspace <name>`) focuses the existing window if it is already open rather than spawning a duplicate window.
+  - Launching additional CelerTerm windows without arguments automatically selects the first unoccupied workspace or creates a new `Workspace N`.
+  - Added visual badge `● In Window` (sky blue) in the Workspace Modal alongside `● Active` (green) to clearly indicate which workspaces are active in other windows.
+  - Protected active workspaces in other windows from accidental deletion.
+
+### Fixed
+
+- **Vietnamese & CJK IME Backspace Deletion**:
+  - Fixed an issue where pressing Backspace on unconfirmed/preedit text deleted 2 characters instead of 1.
+  - Refactored IME commit action state with `ImeCommitAction::{Append, Backspace, None}` so Backspace confirmation emits only the committed preedit slice without redundant space fallbacks, letting `WindowEvent::KeyboardInput` delete exactly 1 character.
+- **Multi-Window Atomic Relaunch on In-App Auto-Update**:
+  - Fixed an issue where performing an in-app update with multiple workspace windows open only restarted a single window.
+  - Added active instance tracking (`~/.config/celerterm/active_instances.json`) that records running PIDs and their corresponding workspaces.
+  - Updated restart script generator to cleanly terminate all other active CelerTerm instances and relaunch every open workspace in its own window (`--workspace <name>`).
+
 ## [0.2.4] - 2026-09-27
 
 ### Added
