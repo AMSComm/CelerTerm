@@ -269,4 +269,45 @@ fn test_active_instances_registration_and_pruning() {
     assert_eq!(loaded[0].workspace_name, "Term");
 }
 
+#[test]
+fn test_update_modal_buttons_layout_wide_640() {
+    use celerterm::window::calculate_update_modal_buttons_with_label;
+
+    for scale in [1.0f32, 2.0f32] {
+        let modal = Rect {
+            x: 80.0 * scale,
+            y: 60.0 * scale,
+            width: 640.0 * scale,
+            height: 280.0 * scale,
+        };
+        let footer_h = 42.0 * scale;
+        let cell_w = 9.0 * scale;
+
+        let buttons = calculate_update_modal_buttons_with_label(
+            modal,
+            footer_h,
+            scale,
+            cell_w,
+            "[Enter] Restart & Update",
+            0x009ECE6A,
+        );
+
+        assert_eq!(buttons.len(), 3);
+        assert_eq!(buttons[0].id, "primary");
+        assert_eq!(buttons[0].label, "[Enter] Restart & Update");
+        assert_eq!(buttons[1].id, "github");
+        assert_eq!(buttons[2].id, "close");
+
+        for btn in &buttons {
+            assert!(btn.rect.x >= modal.x);
+            assert!(btn.rect.x + btn.rect.width <= modal.x + modal.width);
+            assert!(btn.rect.y >= modal.y);
+            assert!(btn.rect.y + btn.rect.height <= modal.y + modal.height);
+        }
+
+        assert!(buttons[0].rect.x + buttons[0].rect.width <= buttons[1].rect.x);
+        assert!(buttons[1].rect.x + buttons[1].rect.width <= buttons[2].rect.x);
+    }
+}
+
 

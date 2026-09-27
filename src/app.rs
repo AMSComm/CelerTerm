@@ -1357,7 +1357,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         if button == MouseButton::Left {
                             let (width, height) = (size.width as f32, size.height as f32);
                             let scale = self.scale_factor;
-                            let modal_w = (520.0 * scale).min(width - 32.0);
+                            let modal_w = (640.0 * scale).min(width - 32.0);
                             let header_h = (36.0 * scale).round();
                             let footer_h = (42.0 * scale).round();
                             let content_h = (200.0 * scale).round();
@@ -2891,7 +2891,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     // 5. Render Software Update Modal if open
                     if self.update_modal.is_open {
                         let scale = self.scale_factor;
-                        let modal_w = (520.0 * scale).min(width as f32 - 32.0);
+                        let modal_w = (640.0 * scale).min(width as f32 - 32.0);
                         let header_h = (36.0 * scale).round();
                         let footer_h = (42.0 * scale).round();
                         let content_h = (200.0 * scale).round();
@@ -3057,15 +3057,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 if let Some(date) = published_at {
                                     let date_short = date.split('T').next().unwrap_or(date);
                                     let date_str = format!("Released: {}", date_short);
-                                    self.renderer.draw_text(
-                                        &mut buffer,
-                                        width,
-                                        height,
-                                        body_x + (ver_info.len() as f32 * self.renderer.cell_width) + (16.0 * scale),
-                                        body_top + line_h,
-                                        &date_str,
-                                        0x00565F89,
-                                    );
+                                    let date_x = body_x + (ver_info.len() as f32 * self.renderer.cell_width) + (16.0 * scale);
+                                    if date_x + (date_str.len() as f32 * self.renderer.cell_width) <= modal_x + modal_w - (16.0 * scale) {
+                                        self.renderer.draw_text(
+                                            &mut buffer,
+                                            width,
+                                            height,
+                                            date_x,
+                                            body_top + line_h,
+                                            &date_str,
+                                            0x00565F89,
+                                        );
+                                    }
                                 }
 
                                 // Release notes frame
@@ -3141,13 +3144,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     &format!("⏳ Downloading CelerTerm {}...", latest_version),
                                     0x007AA2F7,
                                 );
+                                let avail_body_w = modal_w - (40.0 * scale);
+                                let max_status_chars = (avail_body_w / self.renderer.cell_width).floor().max(10.0) as usize;
+                                let status_display = if status_text.chars().count() > max_status_chars {
+                                    let cutoff = status_text.char_indices().map(|(i, _)| i).nth(max_status_chars.saturating_sub(3)).unwrap_or(status_text.len());
+                                    format!("{}...", &status_text[..cutoff])
+                                } else {
+                                    status_text.clone()
+                                };
                                 self.renderer.draw_text(
                                     &mut buffer,
                                     width,
                                     height,
                                     body_x,
                                     body_top + line_h,
-                                    status_text,
+                                    &status_display,
                                     0x00C0CAF5,
                                 );
                                 self.renderer.draw_text(
@@ -3206,14 +3217,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 );
                                 let target_display = target_path.display().to_string();
                                 let target_line = format!("Install Target: {}", target_display);
-                                let t_line = if target_line.len() > 50 { &target_line[..50] } else { &target_line };
+                                let avail_body_w = modal_w - (40.0 * scale);
+                                let max_t_chars = (avail_body_w / self.renderer.cell_width).floor().max(10.0) as usize;
+                                let t_line = if target_line.chars().count() > max_t_chars {
+                                    let cutoff = target_line.char_indices().map(|(i, _)| i).nth(max_t_chars.saturating_sub(3)).unwrap_or(target_line.len());
+                                    format!("{}...", &target_line[..cutoff])
+                                } else {
+                                    target_line
+                                };
                                 self.renderer.draw_text(
                                     &mut buffer,
                                     width,
                                     height,
                                     body_x,
                                     body_top + (line_h * 2.2),
-                                    t_line,
+                                    &t_line,
                                     0x00787C99,
                                 );
                                 self.renderer.draw_text(
@@ -3245,14 +3263,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     "Could not connect to GitHub:",
                                     0x00C0CAF5,
                                 );
-                                let err_line = if err.len() > 50 { &err[..50] } else { err };
+                                let avail_body_w = modal_w - (40.0 * scale);
+                                let max_err_chars = (avail_body_w / self.renderer.cell_width).floor().max(10.0) as usize;
+                                let err_line = if err.chars().count() > max_err_chars {
+                                    let cutoff = err.char_indices().map(|(i, _)| i).nth(max_err_chars.saturating_sub(3)).unwrap_or(err.len());
+                                    format!("{}...", &err[..cutoff])
+                                } else {
+                                    err.clone()
+                                };
                                 self.renderer.draw_text(
                                     &mut buffer,
                                     width,
                                     height,
                                     body_x,
                                     body_top + (line_h * 2.0),
-                                    err_line,
+                                    &err_line,
                                     0x00E0AF68,
                                 );
                                 self.renderer.draw_text(
