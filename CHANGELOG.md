@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-09-27
+
+### Fixed & Improved
+
+- **Vietnamese IME Enter Immediate Execution**:
+  - In Vietnamese IME, pressing Enter with active unconfirmed preedit immediately executes the command (commits preedit and sends `\r` directly to the PTY), matching WezTerm behavior so users do not need to press Enter twice when running terminal commands.
+  - Redundant trailing `KeyboardInput` Enter events from winit are guarded within 150ms to prevent duplicate command execution.
+- **Japanese IME Enter Confirmation**:
+  - In Japanese IME (detected via macOS Carbon TIS input source ID and Japanese Unicode character sets: Hiragana, Katakana, Kanji, fullwidth forms), pressing Enter only confirms the preedit/candidate text into the terminal buffer without emitting `\r` or running the command.
+- **Shift+Enter Multiline Support (Claude CLI, AGY, etc.)**:
+  - Pressing Shift+Enter during active IME composition (Vietnamese or Japanese) commits the text and emits `\n` (newline) instead of `\r`, enabling multiline input without premature prompt submission.
+- **Digit Confirmation on IME Commit (Fix for '0' and Numbers)**:
+  - Fixed an issue where pressing '0' (or other digits) during unconfirmed Vietnamese preedit swallowed the digit or inserted an unwanted space.
+  - Added ASCII digit and keycode detection for all numbers (row & keypad) so typing e.g. `v` + `0` cleanly produces `v0` and `tieng` + `0` produces `tiếng0`.
+
 ## [0.2.6] - 2026-09-27
 
 ### Fixed
