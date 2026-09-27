@@ -27,8 +27,10 @@ use unicode_width::UnicodeWidthStr;
 pub enum ImeCommitAction {
     Append(Vec<u8>),
     Backspace,
+    Confirm,
     None,
 }
+
 
 #[derive(Debug)]
 
@@ -134,6 +136,7 @@ pub struct CelerApp {
     click_count: usize,
     ime_preedit: Option<(String, Option<(usize, usize)>)>,
     last_preedit: Option<(String, std::time::Instant)>,
+    last_ime_confirm: Option<std::time::Instant>,
     scale_factor: f32,
     cols: usize,
     rows: usize,
@@ -254,6 +257,7 @@ impl CelerApp {
             click_count: 0,
             ime_preedit: None,
             last_preedit: None,
+            last_ime_confirm: None,
             scale_factor: 1.0,
             cols,
             rows,
@@ -1175,6 +1179,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 // Do NOT append 0x7f here (would delete 2 characters),
                                 // and do NOT append fallback space (would require 2 backspace presses).
                             }
+                            ImeCommitAction::Confirm => {
+                                // Enter pressed to confirm preedit text (Japanese, Vietnamese, etc.):
+                                // Only confirm the text into the terminal buffer!
+                                // Do NOT append \r (does not execute command), and do NOT append fallback space.
+                                self.last_ime_confirm = Some(std::time::Instant::now());
+                            }
                             ImeCommitAction::None => {
                                 if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
                                     // Default fallback for Vietnamese IME commit: space key
@@ -1774,6 +1784,19 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         win.request_redraw();
                     }
                     return;
+                }
+
+                if matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter)) {
+                    if let Some(t) = self.last_ime_confirm.take() {
+                        if t.elapsed() < std::time::Duration::from_millis(150) {
+                            // This Enter key was consumed by IME to confirm preedit text.
+                            // Do NOT forward newline/carriage return to the shell.
+                            if let Some(ref win) = window {
+                                win.request_redraw();
+                            }
+                            return;
+                        }
+                    }
                 }
 
                 #[cfg(target_os = "macos")]
@@ -3426,8 +3449,8 @@ fn get_ime_commit_action() -> ImeCommitAction {
                         return ImeCommitAction::Backspace;
                     } else if code == 49 { // Space (kVK_Space)
                         return ImeCommitAction::Append(b" ".to_vec());
-                    } else if code == 36 || code == 76 { // Return / KeypadEnter
-                        return ImeCommitAction::Append(b"\r".to_vec());
+                    } else if code == 36 || code == 76 { // Return / KeypadEnter (confirms preedit text only)
+                        return ImeCommitAction::Confirm;
                     } else if code == 48 { // Tab
                         return ImeCommitAction::Append(b"\t".to_vec());
                     } else if let Some(chars) = event.characters() {
@@ -3452,7 +3475,7 @@ fn get_ime_commit_action() -> ImeCommitAction {
         return ImeCommitAction::Append(b" ".to_vec());
     }
     if is_key_down(36) || is_key_down(76) {
-        return ImeCommitAction::Append(b"\r".to_vec());
+        return ImeCommitAction::Confirm;
     }
     if is_key_down(48) {
         return ImeCommitAction::Append(b"\t".to_vec());

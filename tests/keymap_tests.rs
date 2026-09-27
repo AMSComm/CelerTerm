@@ -423,6 +423,7 @@ fn test_vietnamese_ime_commit_decision_logic() {
     enum TestImeCommitAction {
         Append(Vec<u8>),
         Backspace,
+        Confirm,
         None,
     }
 
@@ -445,6 +446,9 @@ fn test_vietnamese_ime_commit_decision_logic() {
                     // We must NOT send 0x7f here (which would delete 2 characters),
                     // and do NOT send fallback space (which would eat backspace and require 2 presses).
                 }
+                TestImeCommitAction::Confirm => {
+                    // Enter confirms preedit text only: do NOT append \r, do NOT append space!
+                }
                 TestImeCommitAction::None => {
                     if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
                         out.push(b' ');
@@ -459,9 +463,12 @@ fn test_vietnamese_ime_commit_decision_logic() {
     let result_space = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b" ".to_vec()));
     assert_eq!(String::from_utf8(result_space).unwrap(), "tiếng ");
 
-    // 2. Vietnamese word committed with Enter
-    let result_enter = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b"\r".to_vec()));
-    assert_eq!(String::from_utf8(result_enter).unwrap(), "tiếng\r");
+    // 2. Word committed with Enter (Vietnamese or Japanese): confirms text only, does NOT append \r or space
+    let result_enter = process_ime_commit(true, "tiếng", TestImeCommitAction::Confirm);
+    assert_eq!(String::from_utf8(result_enter).unwrap(), "tiếng");
+
+    let result_jp_enter = process_ime_commit(true, "日本", TestImeCommitAction::Confirm);
+    assert_eq!(String::from_utf8(result_jp_enter).unwrap(), "日本");
 
     // 3. Fallback when extra key event was consumed: automatically adds Space
     let result_fallback = process_ime_commit(true, "Việt", TestImeCommitAction::None);
