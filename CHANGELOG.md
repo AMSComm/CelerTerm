@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-09-27
+
+### Fixed
+
+- **IME Preedit Confirmation on Enter (Japanese & Vietnamese)**:
+  - Standardized Enter key behavior during active IME preedit composition to match WezTerm, iTerm2, and modern terminal conventions: pressing Enter on unconfirmed preedit text now **only confirms (commits)** the text into the terminal buffer.
+  - Resolved an issue where pressing Enter to confirm preedit sent a carriage return (`\r`), prematurely executing the command or breaking code lines in `nvim`/`vim`.
+  - Added `ImeCommitAction::Confirm` and a dedicated `last_ime_confirm` event guard to suppress subsequent `KeyboardInput` Enter events associated with the preedit confirmation.
+  - Pressing Enter a second time after the text is committed cleanly executes the command in the shell.
+
 ## [0.2.5] - 2026-09-27
 
 ### Added
