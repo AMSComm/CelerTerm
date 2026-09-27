@@ -623,5 +623,76 @@ fn test_unoccupied_workspace_fallback_selection() {
     assert_eq!(next_avail, Some(ws3_id));
 }
 
+#[test]
+fn test_multi_window_workspace_deletion_sync() {
+    use celerterm::workspace::storage::merge_workspace_managers;
+
+    // Both Window 1 and Window 2 initially have 3 workspaces:
+    // "Term" (id: ws_default), "Agent" (id: ws_agent), "Testing" (id: ws_test)
+    let mut initial_mgr = WorkspaceManager::new();
+    initial_mgr.workspaces[0].name = "Term".to_string();
+    let term_tab_id = initial_mgr.workspaces[0].tabs[0].id.clone();
+    let ws_agent_id = initial_mgr.new_workspace("Agent").unwrap();
+    let agent_tab_id = initial_mgr.workspaces.iter().find(|w| w.id == ws_agent_id).unwrap().tabs[0].id.clone();
+    let ws_test_id = initial_mgr.new_workspace("Testing").unwrap();
+
+    // Window 1 is active on "Term", owns term_tab_id
+    let mut win1 = initial_mgr.clone();
+    win1.switch_workspace("ws_default").unwrap();
+
+    // Window 2 is active on "Agent", owns agent_tab_id
+    let mut win2 = initial_mgr.clone();
+    win2.switch_workspace(&ws_agent_id).unwrap();
+
+    // On disk, all 3 exist
+    let disk_snapshot = initial_mgr.clone();
+
+    // Window 1 deletes "Testing"
+    win1.delete_workspace(&ws_test_id).unwrap();
+    let win1_deleted = vec![ws_test_id.clone()];
+    let win1_saved = merge_workspace_managers(
+        &win1,
+        &[term_tab_id.clone()],
+        &win1_deleted,
+        Some(&disk_snapshot),
+        false,
+    );
+
+    // Verify Window 1's saved disk snapshot only contains "Term" and "Agent"
+    assert_eq!(win1_saved.workspaces.len(), 2);
+    assert!(!win1_saved.workspaces.iter().any(|w| w.id == ws_test_id));
+    assert!(win1_saved.workspaces.iter().any(|w| w.id == "ws_default"));
+    assert!(win1_saved.workspaces.iter().any(|w| w.id == ws_agent_id));
+
+    // Now Window 2 syncs / reloads from disk (win1_saved):
+    // Window 2's memory still had "Testing", but Window 2 does NOT own "Testing",
+    // and "Testing" is absent from disk.
+    let win2_reloaded = merge_workspace_managers(
+        &win2,
+        &[agent_tab_id.clone()],
+        &[], // Window 2 didn't delete it itself
+        Some(&win1_saved),
+        true,
+    );
+
+    // CRITICAL: Window 2 MUST drop "Testing" from its workspace list!
+    assert_eq!(win2_reloaded.workspaces.len(), 2, "Window 2 must drop the workspace deleted by Window 1");
+    assert!(!win2_reloaded.workspaces.iter().any(|w| w.id == ws_test_id));
+    assert!(win2_reloaded.workspaces.iter().any(|w| w.id == ws_agent_id));
+    assert!(win2_reloaded.workspaces.iter().any(|w| w.id == "ws_default"));
+
+    // When Window 2 later saves its state, it must NOT resurrect "Testing" back to disk!
+    let win2_saved = merge_workspace_managers(
+        &win2_reloaded,
+        &[agent_tab_id],
+        &[],
+        Some(&win1_saved),
+        true,
+    );
+    assert_eq!(win2_saved.workspaces.len(), 2);
+    assert!(!win2_saved.workspaces.iter().any(|w| w.id == ws_test_id));
+}
+
+
 
 

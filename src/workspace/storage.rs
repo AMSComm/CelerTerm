@@ -62,9 +62,9 @@ pub fn merge_workspace_managers(
             merged_workspaces.push(cur_ws.clone());
         } else if let Some(disk_ws) = disk.workspaces.iter().find(|w| w.id == cur_ws.id) {
             merged_workspaces.push(disk_ws.clone());
-        } else {
-            merged_workspaces.push(cur_ws.clone());
         }
+        // If cur_ws is not owned and not found on disk, it was deleted by another instance.
+        // We intentionally omit it so the deletion is respected across windows.
     }
 
     // 2. Add workspaces from disk that current instance doesn't have in memory
