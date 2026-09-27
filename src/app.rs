@@ -27,6 +27,8 @@ use unicode_width::UnicodeWidthStr;
 pub enum ImeCommitAction {
     Append(Vec<u8>),
     Backspace,
+    Enter,
+    ShiftEnter,
     Confirm,
     None,
 }
@@ -1156,6 +1158,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
                 let had_preedit = self.ime_preedit.is_some()
                     || self.last_preedit.as_ref().map(|(_, t)| t.elapsed() < std::time::Duration::from_millis(1000)).unwrap_or(false);
+                let preedit_text = self.ime_preedit.as_ref().map(|(s, _)| s.clone())
+                    .or_else(|| self.last_preedit.as_ref().map(|(s, _)| s.clone()));
                 self.ime_preedit = None;
                 self.last_preedit = None;
 
@@ -1164,7 +1168,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
                 {
                     let _ = session.write_all(text.as_bytes());
-                    // If text was committed from preedit, also send the commit key (Space, Return, Tab, punctuation)
+                    // If text was committed from preedit, also send the commit key (Space, Return, Tab, punctuation, digits)
                     // unless text already contains or ends with that suffix
                     if had_preedit {
                         match get_ime_commit_action() {
@@ -1179,10 +1183,29 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 // Do NOT append 0x7f here (would delete 2 characters),
                                 // and do NOT append fallback space (would require 2 backspace presses).
                             }
+                            ImeCommitAction::Enter => {
+                                let is_jp = is_japanese_input_source()
+                                    || text.chars().any(is_japanese_char)
+                                    || preedit_text.as_deref().map(|p| p.chars().any(is_japanese_char)).unwrap_or(false);
+                                if is_jp {
+                                    // Japanese IME: Enter only confirms the preedit text into the terminal buffer.
+                                    // Do NOT send \r (does not execute command).
+                                    self.last_ime_confirm = Some(std::time::Instant::now());
+                                } else {
+                                    // Vietnamese / Western: Enter immediately executes the command!
+                                    // No need to press Enter twice.
+                                    let _ = session.write_all(b"\r");
+                                    // Guard against trailing KeyboardInput Enter within 150ms from winit
+                                    self.last_ime_confirm = Some(std::time::Instant::now());
+                                }
+                            }
+                            ImeCommitAction::ShiftEnter => {
+                                // Shift+Enter in multiline prompt (Claude CLI, AGY, etc.):
+                                // Send newline (\n) without submitting/executing command.
+                                let _ = session.write_all(b"\n");
+                                self.last_ime_confirm = Some(std::time::Instant::now());
+                            }
                             ImeCommitAction::Confirm => {
-                                // Enter pressed to confirm preedit text (Japanese, Vietnamese, etc.):
-                                // Only confirm the text into the terminal buffer!
-                                // Do NOT append \r (does not execute command), and do NOT append fallback space.
                                 self.last_ime_confirm = Some(std::time::Instant::now());
                             }
                             ImeCommitAction::None => {
@@ -1786,7 +1809,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
-                if matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter)) {
+                let is_enter_key = matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter))
+                    || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Enter | winit::keyboard::KeyCode::NumpadEnter));
+                if is_enter_key {
                     if let Some(t) = self.last_ime_confirm.take() {
                         if t.elapsed() < std::time::Duration::from_millis(150) {
                             // This Enter key was consumed by IME to confirm preedit text.
@@ -3422,9 +3447,99 @@ fn is_ligature_punctuation(c: char) -> bool {
     matches!(c, '-' | '>' | '=' | '<' | '!' | ':' | '/' | '*' | '.' | '|' | '&' | '~' | '#' | '+' | '%' | '?' | '^')
 }
 
+#[inline]
+pub fn is_japanese_char(c: char) -> bool {
+    matches!(c,
+        // Hiragana
+        '\u{3040}'..='\u{309F}'
+        // Katakana
+        | '\u{30A0}'..='\u{30FF}'
+        // Katakana Phonetic Extensions
+        | '\u{31F0}'..='\u{31FF}'
+        // CJK Unified Ideographs (Kanji)
+        | '\u{4E00}'..='\u{9FFF}'
+        // CJK Extension A
+        | '\u{3400}'..='\u{4DBF}'
+        // CJK Compatibility Ideographs
+        | '\u{F900}'..='\u{FAFF}'
+        // Japanese Punctuation
+        | '\u{3000}'..='\u{303F}'
+        // Halfwidth and Fullwidth Forms
+        | '\u{FF01}'..='\u{FF60}'
+        | '\u{FFE0}'..='\u{FFE6}'
+    )
+}
+
+#[cfg(target_os = "macos")]
+#[inline]
+fn keycode_to_digit(code: u16) -> Option<u8> {
+    match code {
+        29 | 82 => Some(b'0'),
+        18 | 83 => Some(b'1'),
+        19 | 84 => Some(b'2'),
+        20 | 85 => Some(b'3'),
+        21 | 86 => Some(b'4'),
+        23 | 87 => Some(b'5'),
+        22 | 88 => Some(b'6'),
+        26 | 89 => Some(b'7'),
+        28 | 91 => Some(b'8'),
+        25 | 92 => Some(b'9'),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_current_input_source_id() -> Option<String> {
+    #[link(name = "Carbon", kind = "framework")]
+    unsafe extern "C" {
+        fn TISCopyCurrentKeyboardInputSource() -> *const std::ffi::c_void;
+        fn TISGetInputSourceProperty(source: *const std::ffi::c_void, property_key: *const std::ffi::c_void) -> *const std::ffi::c_void;
+        static kTISPropertyInputSourceID: *const std::ffi::c_void;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringGetCString(the_string: *const std::ffi::c_void, buffer: *mut std::ffi::c_char, buffer_size: isize, encoding: u32) -> bool;
+        fn CFRelease(cf: *const std::ffi::c_void);
+    }
+
+    unsafe {
+        let src = TISCopyCurrentKeyboardInputSource();
+        if src.is_null() {
+            return None;
+        }
+        let prop = TISGetInputSourceProperty(src, kTISPropertyInputSourceID);
+        let mut result = None;
+        if !prop.is_null() {
+            let mut buf = vec![0u8; 256];
+            // kCFStringEncodingUTF8 = 0x08000100
+            if CFStringGetCString(prop, buf.as_mut_ptr() as *mut std::ffi::c_char, buf.len() as isize, 0x08000100) {
+                if let Ok(c_str) = std::ffi::CStr::from_ptr(buf.as_ptr() as *const std::ffi::c_char).to_str() {
+                    result = Some(c_str.to_string());
+                }
+            }
+        }
+        CFRelease(src);
+        result
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn is_japanese_input_source() -> bool {
+    get_current_input_source_id().map(|id| {
+        let lower = id.to_lowercase();
+        lower.contains("japanese") || lower.contains("kotoeri") || lower.contains("atok")
+    }).unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_japanese_input_source() -> bool {
+    false
+}
+
 #[cfg(target_os = "macos")]
 fn get_ime_commit_action() -> ImeCommitAction {
-    use objc2_app_kit::{NSApplication, NSEventType};
+    use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
     use objc2_foundation::MainThreadMarker;
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -3439,6 +3554,15 @@ fn get_ime_commit_action() -> ImeCommitAction {
         }
     };
 
+    let is_shift_active = || -> bool {
+        unsafe {
+            let class_flags = NSEvent::modifierFlags_class();
+            class_flags.contains(NSEventModifierFlags::NSEventModifierFlagShift)
+                || is_key_down(56) // Left Shift
+                || is_key_down(60) // Right Shift
+        }
+    };
+
     if let Some(mtm) = MainThreadMarker::new() {
         let app = NSApplication::sharedApplication(mtm);
         if let Some(event) = app.currentEvent() {
@@ -3449,18 +3573,26 @@ fn get_ime_commit_action() -> ImeCommitAction {
                         return ImeCommitAction::Backspace;
                     } else if code == 49 { // Space (kVK_Space)
                         return ImeCommitAction::Append(b" ".to_vec());
-                    } else if code == 36 || code == 76 { // Return / KeypadEnter (confirms preedit text only)
-                        return ImeCommitAction::Confirm;
+                    } else if code == 36 || code == 76 { // Return / KeypadEnter
+                        let is_shift = event.modifierFlags().contains(NSEventModifierFlags::NSEventModifierFlagShift)
+                            || is_shift_active();
+                        if is_shift {
+                            return ImeCommitAction::ShiftEnter;
+                        } else {
+                            return ImeCommitAction::Enter;
+                        }
                     } else if code == 48 { // Tab
                         return ImeCommitAction::Append(b"\t".to_vec());
                     } else if let Some(chars) = event.characters() {
                         let s = chars.to_string();
-                        if s.len() == 1 {
+                        if !s.is_empty() {
                             let c = s.chars().next().unwrap();
-                            if c.is_ascii_punctuation() {
+                            if c.is_ascii_punctuation() || c.is_ascii_digit() {
                                 return ImeCommitAction::Append(s.into_bytes());
                             }
                         }
+                    } else if let Some(digit) = keycode_to_digit(code) {
+                        return ImeCommitAction::Append(vec![digit]);
                     }
                 }
             }
@@ -3475,10 +3607,31 @@ fn get_ime_commit_action() -> ImeCommitAction {
         return ImeCommitAction::Append(b" ".to_vec());
     }
     if is_key_down(36) || is_key_down(76) {
-        return ImeCommitAction::Confirm;
+        if is_shift_active() {
+            return ImeCommitAction::ShiftEnter;
+        } else {
+            return ImeCommitAction::Enter;
+        }
     }
     if is_key_down(48) {
         return ImeCommitAction::Append(b"\t".to_vec());
+    }
+    const DIGIT_KEYS: &[(u16, u8)] = &[
+        (29, b'0'), (82, b'0'),
+        (18, b'1'), (83, b'1'),
+        (19, b'2'), (84, b'2'),
+        (20, b'3'), (85, b'3'),
+        (21, b'4'), (86, b'4'),
+        (23, b'5'), (87, b'5'),
+        (22, b'6'), (88, b'6'),
+        (26, b'7'), (89, b'7'),
+        (28, b'8'), (91, b'8'),
+        (25, b'9'), (92, b'9'),
+    ];
+    for &(kc, digit) in DIGIT_KEYS {
+        if is_key_down(kc) {
+            return ImeCommitAction::Append(vec![digit]);
+        }
     }
 
     ImeCommitAction::None

@@ -419,10 +419,14 @@ fn test_cmd_clipboard_and_utility_shortcuts() {
 
 #[test]
 fn test_vietnamese_ime_commit_decision_logic() {
+    use celerterm::app::is_japanese_char;
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum TestImeCommitAction {
         Append(Vec<u8>),
         Backspace,
+        Enter,
+        ShiftEnter,
         Confirm,
         None,
     }
@@ -431,6 +435,7 @@ fn test_vietnamese_ime_commit_decision_logic() {
         had_preedit: bool,
         text: &str,
         action: TestImeCommitAction,
+        is_japanese_env: bool,
     ) -> Vec<u8> {
         let mut out = text.as_bytes().to_vec();
         if had_preedit {
@@ -446,8 +451,22 @@ fn test_vietnamese_ime_commit_decision_logic() {
                     // We must NOT send 0x7f here (which would delete 2 characters),
                     // and do NOT send fallback space (which would eat backspace and require 2 presses).
                 }
+                TestImeCommitAction::Enter => {
+                    let is_jp = is_japanese_env || text.chars().any(is_japanese_char);
+                    if is_jp {
+                        // Japanese: confirm preedit only, no carriage return
+                    } else {
+                        // Vietnamese / Western: execute command immediately!
+                        out.push(b'\r');
+                    }
+                }
+                TestImeCommitAction::ShiftEnter => {
+                    // Shift+Enter in Claude CLI / AGY / multiline prompt:
+                    // Insert newline without executing command!
+                    out.push(b'\n');
+                }
                 TestImeCommitAction::Confirm => {
-                    // Enter confirms preedit text only: do NOT append \r, do NOT append space!
+                    // Confirm only
                 }
                 TestImeCommitAction::None => {
                     if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
@@ -460,43 +479,87 @@ fn test_vietnamese_ime_commit_decision_logic() {
     }
 
     // 1. Vietnamese word committed with Space
-    let result_space = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b" ".to_vec()));
+    let result_space = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b" ".to_vec()), false);
     assert_eq!(String::from_utf8(result_space).unwrap(), "tiếng ");
 
-    // 2. Word committed with Enter (Vietnamese or Japanese): confirms text only, does NOT append \r or space
-    let result_enter = process_ime_commit(true, "tiếng", TestImeCommitAction::Confirm);
-    assert_eq!(String::from_utf8(result_enter).unwrap(), "tiếng");
+    // 2. Vietnamese command / text committed with Enter: executes command immediately!
+    let result_vi_enter = process_ime_commit(true, "ls", TestImeCommitAction::Enter, false);
+    assert_eq!(String::from_utf8(result_vi_enter).unwrap(), "ls\r");
 
-    let result_jp_enter = process_ime_commit(true, "日本", TestImeCommitAction::Confirm);
+    let result_vi_text_enter = process_ime_commit(true, "tiếng Việt", TestImeCommitAction::Enter, false);
+    assert_eq!(String::from_utf8(result_vi_text_enter).unwrap(), "tiếng Việt\r");
+
+    // 3. Japanese text committed with Enter: confirms text only, does NOT execute (\r is omitted)
+    let result_jp_enter = process_ime_commit(true, "日本", TestImeCommitAction::Enter, false);
     assert_eq!(String::from_utf8(result_jp_enter).unwrap(), "日本");
 
-    // 3. Fallback when extra key event was consumed: automatically adds Space
-    let result_fallback = process_ime_commit(true, "Việt", TestImeCommitAction::None);
+    let result_jp_hiragana = process_ime_commit(true, "にほん", TestImeCommitAction::Enter, false);
+    assert_eq!(String::from_utf8(result_jp_hiragana).unwrap(), "にほん");
+
+    let result_jp_env_romaji = process_ime_commit(true, "nihon", TestImeCommitAction::Enter, true);
+    assert_eq!(String::from_utf8(result_jp_env_romaji).unwrap(), "nihon");
+
+    // 4. Shift+Enter in Claude CLI / AGY: appends newline \n without submitting
+    let result_shift_enter = process_ime_commit(true, "dòng 1", TestImeCommitAction::ShiftEnter, false);
+    assert_eq!(String::from_utf8(result_shift_enter).unwrap(), "dòng 1\n");
+
+    // 4b. Explicit Confirm: confirms text without newline
+    let result_explicit_confirm = process_ime_commit(true, "tiếng", TestImeCommitAction::Confirm, false);
+    assert_eq!(String::from_utf8(result_explicit_confirm).unwrap(), "tiếng");
+
+    // 5. Typing digit '0' during unconfirmed Vietnamese preedit confirms and appends '0'
+    let result_digit_zero = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b"0".to_vec()), false);
+    assert_eq!(String::from_utf8(result_digit_zero).unwrap(), "tiếng0");
+
+    let result_v_zero = process_ime_commit(true, "v", TestImeCommitAction::Append(b"0".to_vec()), false);
+    assert_eq!(String::from_utf8(result_v_zero).unwrap(), "v0");
+
+    // 6. Typing other digits (e.g. '3' in python3) confirms and appends digit
+    let result_python3 = process_ime_commit(true, "python", TestImeCommitAction::Append(b"3".to_vec()), false);
+    assert_eq!(String::from_utf8(result_python3).unwrap(), "python3");
+
+    // 7. Text already ending in digit does not duplicate
+    let result_no_dup = process_ime_commit(true, "tiếng0", TestImeCommitAction::Append(b"0".to_vec()), false);
+    assert_eq!(String::from_utf8(result_no_dup).unwrap(), "tiếng0");
+
+    // 8. Fallback when extra key event was consumed: automatically adds Space
+    let result_fallback = process_ime_commit(true, "Việt", TestImeCommitAction::None, false);
     assert_eq!(String::from_utf8(result_fallback).unwrap(), "Việt ");
 
-    // 4. Committed text already ending in punctuation does not duplicate or add space
-    let result_punct = process_ime_commit(true, "tiếng.", TestImeCommitAction::Append(b".".to_vec()));
+    // 9. Committed text already ending in punctuation does not duplicate or add space
+    let result_punct = process_ime_commit(true, "tiếng.", TestImeCommitAction::Append(b".".to_vec()), false);
     assert_eq!(String::from_utf8(result_punct).unwrap(), "tiếng.");
 
-    // 5. Normal input without preedit (had_preedit = false) does not append anything
-    let result_normal = process_ime_commit(false, "abc", TestImeCommitAction::Append(b" ".to_vec()));
+    // 10. Normal input without preedit (had_preedit = false) does not append anything
+    let result_normal = process_ime_commit(false, "abc", TestImeCommitAction::Append(b" ".to_vec()), false);
     assert_eq!(String::from_utf8(result_normal).unwrap(), "abc");
 
-    // 6. Vietnamese word committed with Backspace:
-    // IME commit outputs only the committed text without space fallback;
-    // WindowEvent::KeyboardInput sends the single 0x7f right after.
-    let result_backspace = process_ime_commit(true, "tiếng", TestImeCommitAction::Backspace);
+    // 11. Vietnamese word committed with Backspace:
+    let result_backspace = process_ime_commit(true, "tiếng", TestImeCommitAction::Backspace, false);
     assert_eq!(String::from_utf8(result_backspace.clone()).unwrap(), "tiếng");
 
-    // 7. Simulating full Backspace key sequence: IME commit + KeyboardInput
+    // 12. Simulating full Backspace key sequence: IME commit + KeyboardInput
     let mut terminal_input = result_backspace;
     terminal_input.push(0x7f); // from WindowEvent::KeyboardInput
-    // Verifies that exactly ONE 0x7f is sent at the end of the committed word, preventing double character deletion!
     assert_eq!(terminal_input, b"ti\xe1\xba\xbfng\x7f".to_vec());
 
-    // 8. Empty preedit cancelled with Backspace: does not emit extra bytes
-    let result_empty_backspace = process_ime_commit(true, "", TestImeCommitAction::Backspace);
+    // 13. Empty preedit cancelled with Backspace: does not emit extra bytes
+    let result_empty_backspace = process_ime_commit(true, "", TestImeCommitAction::Backspace, false);
     assert_eq!(result_empty_backspace, Vec::<u8>::new());
+
+    // 14. Verify is_japanese_char character classifications
+    assert!(is_japanese_char('あ'));
+    assert!(is_japanese_char('ん'));
+    assert!(is_japanese_char('ア'));
+    assert!(is_japanese_char('ン'));
+    assert!(is_japanese_char('日'));
+    assert!(is_japanese_char('本'));
+    assert!(is_japanese_char('１')); // fullwidth 1
+    assert!(!is_japanese_char('a'));
+    assert!(!is_japanese_char('0'));
+    assert!(!is_japanese_char('ế'));
+    assert!(!is_japanese_char('đ'));
+    assert!(!is_japanese_char('ư'));
 }
 
 #[test]
