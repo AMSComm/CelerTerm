@@ -97,3 +97,111 @@ pub fn get_all_active_instances() -> Vec<ActiveInstance> {
         Vec::new()
     }
 }
+
+pub fn find_other_instance_in<'a>(
+    instances: &'a [ActiveInstance],
+    my_pid: u32,
+    ws_id: &str,
+    ws_name: &str,
+) -> Option<&'a ActiveInstance> {
+    instances.iter().find(|inst| {
+        inst.pid != my_pid
+            && ((!ws_id.is_empty() && inst.workspace_id == ws_id)
+                || (!ws_name.is_empty() && inst.workspace_name == ws_name))
+    })
+}
+
+pub fn find_other_instance_for_workspace(
+    my_pid: u32,
+    ws_id: &str,
+    ws_name: &str,
+) -> Option<ActiveInstance> {
+    let instances = get_all_active_instances();
+    find_other_instance_in(&instances, my_pid, ws_id, ws_name).cloned()
+}
+
+pub fn focus_instance(pid: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSRunningApplication, NSApplicationActivationOptions};
+        unsafe {
+            if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32) {
+                #[allow(deprecated)]
+                let success = app.activateWithOptions(NSApplicationActivationOptions::NSApplicationActivateIgnoringOtherApps);
+                if success {
+                    return true;
+                }
+            }
+        }
+        let script = format!(
+            "tell application \"System Events\" to set frontmost of the first process whose unix id is {} to true",
+            pid
+        );
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .spawn();
+        true
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("xdotool search --pid {pid} windowactivate 2>/dev/null || wmctrl -i -a $(wmctrl -lp | awk '$3 == {pid} {{print $1}}') 2>/dev/null", pid = pid))
+            .spawn();
+        true
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_other_instance_in() {
+        let instances = vec![
+            ActiveInstance {
+                pid: 1001,
+                workspace_name: "Dev".to_string(),
+                workspace_id: "ws-1".to_string(),
+                updated_at: 100,
+            },
+            ActiveInstance {
+                pid: 1002,
+                workspace_name: "Ops".to_string(),
+                workspace_id: "ws-2".to_string(),
+                updated_at: 200,
+            },
+        ];
+
+        // Searching from pid 1001 for its own workspace -> None
+        assert_eq!(find_other_instance_in(&instances, 1001, "ws-1", "Dev"), None);
+
+        // Searching from pid 1001 for "Ops" -> finds 1002
+        let other = find_other_instance_in(&instances, 1001, "ws-2", "Ops");
+        assert!(other.is_some());
+        assert_eq!(other.unwrap().pid, 1002);
+
+        // Searching by ID only
+        let other_by_id = find_other_instance_in(&instances, 1001, "ws-2", "");
+        assert_eq!(other_by_id.unwrap().pid, 1002);
+
+        // Searching by Name only
+        let other_by_name = find_other_instance_in(&instances, 1001, "", "Ops");
+        assert_eq!(other_by_name.unwrap().pid, 1002);
+
+        // Non-existent workspace
+        assert_eq!(find_other_instance_in(&instances, 1001, "ws-99", "Unknown"), None);
+    }
+}
+
+
+
+

@@ -186,13 +186,45 @@ impl CelerApp {
             }
         }
 
+        let my_pid = std::process::id();
+        let other_instances = crate::workspace::get_all_active_instances();
+
         if let Some(ref ws_name) = target_ws {
+            if let Some(other) = crate::workspace::find_other_instance_in(&other_instances, my_pid, "", ws_name) {
+                log::info!("Workspace '{}' is already open in PID {}. Focusing that window.", ws_name, other.pid);
+                crate::workspace::focus_instance(other.pid);
+                std::process::exit(0);
+            }
             if let Some(existing) = workspace_mgr.workspaces.iter().find(|w| &w.name == ws_name) {
                 workspace_mgr.active_workspace_id = existing.id.clone();
             } else if let Ok(new_id) = workspace_mgr.new_workspace(ws_name) {
                 workspace_mgr.active_workspace_id = new_id;
             }
+        } else {
+            let active_name = workspace_mgr.get_active_workspace().map(|w| w.name.clone()).unwrap_or_default();
+            if crate::workspace::find_other_instance_in(&other_instances, my_pid, &workspace_mgr.active_workspace_id, &active_name).is_some() {
+                let available = workspace_mgr.workspaces.iter().find(|w| {
+                    crate::workspace::find_other_instance_in(&other_instances, my_pid, &w.id, &w.name).is_none()
+                }).map(|w| w.id.clone());
+
+                if let Some(available_id) = available {
+                    workspace_mgr.active_workspace_id = available_id;
+                } else {
+                    let mut n = workspace_mgr.workspaces.len() + 1;
+                    let mut new_name = format!("Workspace {}", n);
+                    while workspace_mgr.workspaces.iter().any(|w| w.name == new_name) {
+                        n += 1;
+                        new_name = format!("Workspace {}", n);
+                    }
+                    if let Ok(new_id) = workspace_mgr.new_workspace(&new_name) {
+                        workspace_mgr.active_workspace_id = new_id;
+                    }
+                }
+            }
         }
+
+        let is_secondary_window = is_secondary_window || !other_instances.is_empty();
+
 
         let cols = 100;
         let rows = 30;
@@ -537,6 +569,62 @@ impl CelerApp {
         }
     }
 
+    /// Attempts to switch to target workspace. If it is already open in another window,
+    /// brings that window to front instead of switching locally.
+    /// Returns true if switched locally, false if focused another window or failed.
+    pub fn switch_or_focus_workspace(&mut self, target_id: &str) -> bool {
+        let target = match self.workspace_mgr.workspaces.iter().find(|w| w.id == target_id) {
+            Some(w) => w,
+            None => return false,
+        };
+        let target_name = target.name.clone();
+        let target_id = target.id.clone();
+        let my_pid = std::process::id();
+
+        if let Some(other) = crate::workspace::find_other_instance_for_workspace(my_pid, &target_id, &target_name) {
+            log::info!("Workspace '{}' is already open in PID {}. Focusing that instance.", target_name, other.pid);
+            crate::workspace::focus_instance(other.pid);
+            return false;
+        }
+
+        self.sync_workspace_from_disk_if_unowned(&target_id);
+        if self.workspace_mgr.switch_workspace(&target_id).is_ok() {
+            self.activate_current_workspace_sessions();
+            self.save_workspace_state();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Spawns a new window for the workspace if it's not already open elsewhere.
+    /// If already open in another window, focuses it instead.
+    /// If it's already the current active workspace in this window, ignores duplicate creation.
+    pub fn open_workspace_in_new_window(&mut self, target_idx: usize) {
+        if let Some(ws) = self.workspace_mgr.workspaces.get(target_idx) {
+            let target_id = ws.id.clone();
+            let target_name = ws.name.clone();
+            let my_pid = std::process::id();
+
+            if let Some(other) = crate::workspace::find_other_instance_for_workspace(my_pid, &target_id, &target_name) {
+                log::info!("Workspace '{}' is already open in PID {}. Focusing that instance.", target_name, other.pid);
+                crate::workspace::focus_instance(other.pid);
+                return;
+            }
+
+            if target_id == self.workspace_mgr.active_workspace_id {
+                log::info!("Workspace '{}' is already active in current window.", target_name);
+                return;
+            }
+
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe)
+                    .arg("--workspace")
+                    .arg(&target_name)
+                    .spawn();
+            }
+        }
+    }
 
     fn handle_modal_key(&mut self, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
         match &mut self.workspace_modal.mode {
@@ -614,10 +702,7 @@ impl CelerApp {
                         let idx = self.workspace_modal.selected_index;
                         if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                             let target_id = ws.id.clone();
-                            self.sync_workspace_from_disk_if_unowned(&target_id);
-                            let _ = self.workspace_mgr.switch_workspace(&target_id);
-                            self.activate_current_workspace_sessions();
-                            self.save_workspace_state();
+                            self.switch_or_focus_workspace(&target_id);
                         }
                         self.workspace_modal.is_open = false;
                     }
@@ -637,24 +722,22 @@ impl CelerApp {
                                     let idx = self.workspace_modal.selected_index;
                                     if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                         let target_id = ws.id.clone();
-                                        self.deleted_workspace_ids.push(target_id.clone());
-                                        let _ = self.workspace_mgr.delete_workspace(&target_id);
-                                        self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
-                                        self.activate_current_workspace_sessions();
-                                        self.save_workspace_state();
+                                        let my_pid = std::process::id();
+                                        if crate::workspace::find_other_instance_for_workspace(my_pid, &target_id, &ws.name).is_some() {
+                                            log::warn!("Cannot delete workspace '{}' because it is active in another window.", ws.name);
+                                        } else {
+                                            self.deleted_workspace_ids.push(target_id.clone());
+                                            let _ = self.workspace_mgr.delete_workspace(&target_id);
+                                            self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
+                                            self.activate_current_workspace_sessions();
+                                            self.save_workspace_state();
+                                        }
                                     }
                                 }
                             }
                             "w" | "W" => {
                                 let idx = self.workspace_modal.selected_index;
-                                if let Some(ws) = self.workspace_mgr.workspaces.get(idx)
-                                    && let Ok(exe) = std::env::current_exe()
-                                {
-                                    let _ = std::process::Command::new(exe)
-                                        .arg("--workspace")
-                                        .arg(&ws.name)
-                                        .spawn();
-                                }
+                                self.open_workspace_in_new_window(idx);
                                 self.workspace_modal.is_open = false;
                             }
                             "k" => {
@@ -670,10 +753,7 @@ impl CelerApp {
                                     && num >= 1 && num <= self.workspace_mgr.workspaces.len()
                                 {
                                     let target_id = self.workspace_mgr.workspaces[num - 1].id.clone();
-                                    self.sync_workspace_from_disk_if_unowned(&target_id);
-                                    let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                    self.activate_current_workspace_sessions();
-                                    self.save_workspace_state();
+                                    self.switch_or_focus_workspace(&target_id);
                                     self.workspace_modal.is_open = false;
                                 }
                             }
@@ -1322,10 +1402,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     if self.workspace_modal.selected_index == clicked_idx {
                                         // Clicking selected row switches to it
                                         let target_id = self.workspace_mgr.workspaces[clicked_idx].id.clone();
-                                        self.sync_workspace_from_disk_if_unowned(&target_id);
-                                        let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                        self.activate_current_workspace_sessions();
-                                        self.save_workspace_state();
+                                        self.switch_or_focus_workspace(&target_id);
                                         self.workspace_modal.is_open = false;
                                     } else {
                                         self.workspace_modal.selected_index = clicked_idx;
@@ -1370,11 +1447,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                                 let idx = self.workspace_modal.selected_index;
                                                 if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                                     let target_id = ws.id.clone();
-                                                    self.deleted_workspace_ids.push(target_id.clone());
-                                                    let _ = self.workspace_mgr.delete_workspace(&target_id);
-                                                    self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
-                                                    self.activate_current_workspace_sessions();
-                                                    self.save_workspace_state();
+                                                    let my_pid = std::process::id();
+                                                    if crate::workspace::find_other_instance_for_workspace(my_pid, &target_id, &ws.name).is_some() {
+                                                        log::warn!("Cannot delete workspace '{}' because it is active in another window.", ws.name);
+                                                    } else {
+                                                        self.deleted_workspace_ids.push(target_id.clone());
+                                                        let _ = self.workspace_mgr.delete_workspace(&target_id);
+                                                        self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len() - 1);
+                                                        self.activate_current_workspace_sessions();
+                                                        self.save_workspace_state();
+                                                    }
                                                 }
                                             }
                                             window.request_redraw();
@@ -1382,14 +1464,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         }
                                         "window" => {
                                             let idx = self.workspace_modal.selected_index;
-                                            if let Some(ws) = self.workspace_mgr.workspaces.get(idx)
-                                                && let Ok(exe) = std::env::current_exe()
-                                            {
-                                                let _ = std::process::Command::new(exe)
-                                                    .arg("--workspace")
-                                                    .arg(&ws.name)
-                                                    .spawn();
-                                            }
+                                            self.open_workspace_in_new_window(idx);
                                             self.workspace_modal.is_open = false;
                                             window.request_redraw();
                                             return;
@@ -1398,10 +1473,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                             let idx = self.workspace_modal.selected_index;
                                             if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                                 let target_id = ws.id.clone();
-                                                self.sync_workspace_from_disk_if_unowned(&target_id);
-                                                let _ = self.workspace_mgr.switch_workspace(&target_id);
-                                                self.activate_current_workspace_sessions();
-                                                self.save_workspace_state();
+                                                self.switch_or_focus_workspace(&target_id);
                                             }
                                             self.workspace_modal.is_open = false;
                                             window.request_redraw();
@@ -1785,23 +1857,29 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                         KeyAction::PreviousWorkspace => {
-                            if self.workspace_mgr.previous_workspace().is_ok() {
-                                let active_ws_id = self.workspace_mgr.active_workspace_id.clone();
-                                self.sync_workspace_from_disk_if_unowned(&active_ws_id);
-                                self.activate_current_workspace_sessions();
-                                self.save_workspace_state();
-                                if let Some(ref win) = window {
+                            if !self.workspace_mgr.workspaces.is_empty() {
+                                let current_pos = self.workspace_mgr.workspaces.iter().position(|w| w.id == self.workspace_mgr.active_workspace_id).unwrap_or(0);
+                                let prev_pos = if current_pos == 0 {
+                                    self.workspace_mgr.workspaces.len() - 1
+                                } else {
+                                    current_pos - 1
+                                };
+                                let target_id = self.workspace_mgr.workspaces[prev_pos].id.clone();
+                                if self.switch_or_focus_workspace(&target_id)
+                                    && let Some(ref win) = window
+                                {
                                     win.request_redraw();
                                 }
                             }
                         }
                         KeyAction::NextWorkspace => {
-                            if self.workspace_mgr.next_workspace().is_ok() {
-                                let active_ws_id = self.workspace_mgr.active_workspace_id.clone();
-                                self.sync_workspace_from_disk_if_unowned(&active_ws_id);
-                                self.activate_current_workspace_sessions();
-                                self.save_workspace_state();
-                                if let Some(ref win) = window {
+                            if !self.workspace_mgr.workspaces.is_empty() {
+                                let current_pos = self.workspace_mgr.workspaces.iter().position(|w| w.id == self.workspace_mgr.active_workspace_id).unwrap_or(0);
+                                let next_pos = (current_pos + 1) % self.workspace_mgr.workspaces.len();
+                                let target_id = self.workspace_mgr.workspaces[next_pos].id.clone();
+                                if self.switch_or_focus_workspace(&target_id)
+                                    && let Some(ref win) = window
+                                {
                                     win.request_redraw();
                                 }
                             }
@@ -2534,6 +2612,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                         // Workspace list rows
                         let list_top = modal_y + header_h + (8.0 * scale);
+                        let my_pid = std::process::id();
+                        let other_instances = crate::workspace::get_all_active_instances();
                         for (idx, ws) in self.workspace_mgr.workspaces.iter().enumerate() {
                             let row_y = list_top + (idx as f32 * row_h);
                             let is_selected = idx == self.workspace_modal.selected_index;
@@ -2566,6 +2646,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if is_current {
                                 let cur_x = modal_x + modal_w - (80.0 * scale);
                                 self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● Active", 0x009ECE6A);
+                            } else if other_instances.iter().any(|inst| inst.pid != my_pid && (inst.workspace_id == ws.id || inst.workspace_name == ws.name)) {
+                                let cur_x = modal_x + modal_w - (105.0 * scale);
+                                self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● In Window", 0x007DCFFF);
                             }
                         }
 

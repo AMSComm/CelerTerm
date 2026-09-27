@@ -534,4 +534,94 @@ fn test_merge_workspace_managers_respects_deletions_and_adds_external() {
     assert!(merged.workspaces.iter().any(|w| w.id == ws3_id));
 }
 
+#[test]
+fn test_duplicate_instance_detection_and_resolution() {
+    use celerterm::workspace::instances::{ActiveInstance, find_other_instance_in};
+
+    let instances = vec![
+        ActiveInstance {
+            pid: 1001,
+            workspace_name: "Dev".to_string(),
+            workspace_id: "ws_dev".to_string(),
+            updated_at: 100,
+        },
+        ActiveInstance {
+            pid: 1002,
+            workspace_name: "Ops".to_string(),
+            workspace_id: "ws_ops".to_string(),
+            updated_at: 200,
+        },
+    ];
+
+    let my_pid = 1001;
+
+    // Searching for my own workspace (Dev) should NOT find an "other" instance
+    assert!(find_other_instance_in(&instances, my_pid, "ws_dev", "Dev").is_none());
+
+    // Searching for Ops should find PID 1002
+    let ops_other = find_other_instance_in(&instances, my_pid, "ws_ops", "Ops");
+    assert!(ops_other.is_some());
+    assert_eq!(ops_other.unwrap().pid, 1002);
+
+    // From a 3rd window (PID 1003): both Dev and Ops are detected as occupied
+    let other_dev = find_other_instance_in(&instances, 1003, "ws_dev", "Dev");
+    assert_eq!(other_dev.unwrap().pid, 1001);
+
+    let other_ops = find_other_instance_in(&instances, 1003, "ws_ops", "Ops");
+    assert_eq!(other_ops.unwrap().pid, 1002);
+}
+
+#[test]
+fn test_unoccupied_workspace_fallback_selection() {
+    use celerterm::workspace::instances::{ActiveInstance, find_other_instance_in};
+
+    let mut mgr = WorkspaceManager::new();
+    let ws1_id = mgr.active_workspace_id.clone();
+    let ws1_name = mgr.get_active_workspace().unwrap().name.clone();
+
+    let ws2_id = mgr.new_workspace("Project B").unwrap();
+    let ws3_id = mgr.new_workspace("Project C").unwrap();
+
+    // Suppose ws1 is active in another instance (PID 5000)
+    let instances = vec![
+        ActiveInstance {
+            pid: 5000,
+            workspace_name: ws1_name,
+            workspace_id: ws1_id.clone(),
+            updated_at: 100,
+        }
+    ];
+
+    let my_pid = 6000;
+    // Window 2 starts up, ws1 is occupied. Find first unowned workspace:
+    let available_id = mgr.workspaces.iter().find(|w| {
+        find_other_instance_in(&instances, my_pid, &w.id, &w.name).is_none()
+    }).map(|w| w.id.clone());
+
+    assert_eq!(available_id, Some(ws2_id.clone()));
+
+    // Now suppose both ws1 and ws2 are occupied:
+    let instances_all = vec![
+        ActiveInstance {
+            pid: 5000,
+            workspace_name: "Default".to_string(),
+            workspace_id: ws1_id,
+            updated_at: 100,
+        },
+        ActiveInstance {
+            pid: 5001,
+            workspace_name: "Project B".to_string(),
+            workspace_id: ws2_id,
+            updated_at: 110,
+        },
+    ];
+
+    let next_avail = mgr.workspaces.iter().find(|w| {
+        find_other_instance_in(&instances_all, my_pid, &w.id, &w.name).is_none()
+    }).map(|w| w.id.clone());
+
+    assert_eq!(next_avail, Some(ws3_id));
+}
+
+
 
