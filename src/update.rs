@@ -285,62 +285,178 @@ pub fn download_and_stage_update(url: &str, asset_name: &str) -> Result<PathBuf,
     }
 }
 
-pub fn apply_update_and_restart(staged_path: &Path, target_path: &Path) -> Result<(), String> {
-    let pid = std::process::id();
+pub fn find_other_celerterm_pids() -> Vec<u32> {
+    let my_pid = std::process::id();
+    let mut pids = Vec::new();
 
+    #[cfg(unix)]
+    {
+        if let Ok(output) = Command::new("ps")
+            .arg("-axo")
+            .arg("pid,command")
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let lower = line.to_ascii_lowercase();
+                    if lower.contains("celerterm") {
+                        if let Some(first_word) = line.split_whitespace().next() {
+                            if let Ok(pid) = first_word.parse::<u32>() {
+                                if pid != my_pid && pid > 0 && !pids.contains(&pid) {
+                                    pids.push(pid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pids
+}
+
+pub fn generate_restart_script(
+    pid: u32,
+    target_str: &str,
+    staged_str: &str,
+    other_pids: &[u32],
+    workspaces_to_reopen: &[String],
+) -> String {
     #[cfg(target_os = "macos")]
     {
-        let staged_str = staged_path.to_str().ok_or("Invalid staged path")?;
-        let target_str = target_path.to_str().ok_or("Invalid target path")?;
+        let kill_others_cmds = if other_pids.is_empty() {
+            String::new()
+        } else {
+            let pids_str = other_pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
+            format!(
+                "for p in {pids}; do kill -TERM $p 2>/dev/null; done; \
+                 for i in $(seq 1 40); do \
+                     alive=0; \
+                     for p in {pids}; do \
+                         if kill -0 $p 2>/dev/null; then alive=1; break; fi; \
+                     done; \
+                     if [ $alive -eq 0 ]; then break; fi; \
+                     sleep 0.05; \
+                 done; \
+                 for p in {pids}; do kill -9 $p 2>/dev/null; done; ",
+                pids = pids_str
+            )
+        };
 
-        let script = format!(
+        let mut relaunch_cmds = String::new();
+        if workspaces_to_reopen.is_empty() {
+            relaunch_cmds.push_str(&format!("open -n \"{}\"", target_str));
+        } else if workspaces_to_reopen.len() == 1 {
+            relaunch_cmds.push_str(&format!(
+                "open -n \"{}\" --args --workspace \"{}\"",
+                target_str, workspaces_to_reopen[0]
+            ));
+        } else {
+            for (idx, ws) in workspaces_to_reopen.iter().enumerate() {
+                if idx > 0 {
+                    relaunch_cmds.push_str("sleep 0.2; ");
+                }
+                relaunch_cmds.push_str(&format!(
+                    "open -n \"{}\" --args --workspace \"{}\"; ",
+                    target_str, ws
+                ));
+            }
+        }
+
+        format!(
             "while kill -0 {pid} 2>/dev/null; do sleep 0.05; done; \
+             {kill_others}\
              rm -rf \"{target}\"; \
              mv \"{staged}\" \"{target}\"; \
-             open -n \"{target}\"",
+             {relaunch}",
             pid = pid,
+            kill_others = kill_others_cmds,
             target = target_str,
-            staged = staged_str
-        );
-
-        Command::new("sh")
-            .arg("-c")
-            .arg(script)
-            .spawn()
-            .map_err(|e| format!("Failed to spawn update restart script: {}", e))?;
-
-        Ok(())
+            staged = staged_str,
+            relaunch = relaunch_cmds
+        )
     }
 
     #[cfg(target_os = "linux")]
     {
-        let staged_str = staged_path.to_str().ok_or("Invalid staged path")?;
-        let target_str = target_path.to_str().ok_or("Invalid target path")?;
+        let kill_others_cmds = if other_pids.is_empty() {
+            String::new()
+        } else {
+            let pids_str = other_pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
+            format!(
+                "for p in {pids}; do kill -TERM $p 2>/dev/null; done; \
+                 for i in $(seq 1 40); do \
+                     alive=0; \
+                     for p in {pids}; do \
+                         if kill -0 $p 2>/dev/null; then alive=1; break; fi; \
+                     done; \
+                     if [ $alive -eq 0 ]; then break; fi; \
+                     sleep 0.05; \
+                 done; \
+                 for p in {pids}; do kill -9 $p 2>/dev/null; done; ",
+                pids = pids_str
+            )
+        };
 
-        let script = format!(
+        let mut relaunch_cmds = String::new();
+        if workspaces_to_reopen.is_empty() {
+            relaunch_cmds.push_str(&format!("\"{}\" &", target_str));
+        } else {
+            for ws in workspaces_to_reopen {
+                relaunch_cmds.push_str(&format!(
+                    "\"{}\" --workspace \"{}\" & ",
+                    target_str, ws
+                ));
+            }
+        }
+
+        format!(
             "while kill -0 {pid} 2>/dev/null; do sleep 0.05; done; \
+             {kill_others}\
              cp -f \"{staged}\" \"{target}\"; \
              chmod +x \"{target}\"; \
-             \"{target}\" &",
+             {relaunch}",
             pid = pid,
+            kill_others = kill_others_cmds,
             target = target_str,
-            staged = staged_str
-        );
-
-        Command::new("sh")
-            .arg("-c")
-            .arg(script)
-            .spawn()
-            .map_err(|e| format!("Failed to spawn update restart script: {}", e))?;
-
-        Ok(())
+            staged = staged_str,
+            relaunch = relaunch_cmds
+        )
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        Err("Auto-restart not supported on this platform".to_string())
+        let _ = (pid, target_str, staged_str, other_pids, workspaces_to_reopen);
+        String::new()
     }
 }
+
+pub fn apply_update_and_restart(
+    staged_path: &Path,
+    target_path: &Path,
+    other_pids: &[u32],
+    workspaces_to_reopen: &[String],
+) -> Result<(), String> {
+    let pid = std::process::id();
+    let staged_str = staged_path.to_str().ok_or("Invalid staged path")?;
+    let target_str = target_path.to_str().ok_or("Invalid target path")?;
+
+    let script = generate_restart_script(pid, target_str, staged_str, other_pids, workspaces_to_reopen);
+    if script.is_empty() {
+        return Err("Auto-restart not supported on this platform".to_string());
+    }
+
+    Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .spawn()
+        .map_err(|e| format!("Failed to spawn update restart script: {}", e))?;
+
+    Ok(())
+}
+
 
 pub fn open_browser(url: &str) {
     #[cfg(target_os = "macos")]

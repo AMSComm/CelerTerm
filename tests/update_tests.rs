@@ -191,3 +191,82 @@ fn test_get_target_app_path_validity() {
     }
 }
 
+#[test]
+fn test_generate_restart_script_single_workspace() {
+    use celerterm::update::generate_restart_script;
+
+    let script = generate_restart_script(
+        1234,
+        "/Applications/CelerTerm.app",
+        "/tmp/celerterm_update/CelerTerm.app",
+        &[],
+        &["Term".to_string()],
+    );
+
+    assert!(script.contains("kill -0 1234"));
+    #[cfg(target_os = "macos")]
+    {
+        assert!(script.contains("rm -rf \"/Applications/CelerTerm.app\""));
+        assert!(script.contains("mv \"/tmp/celerterm_update/CelerTerm.app\" \"/Applications/CelerTerm.app\""));
+        assert!(script.contains("open -n \"/Applications/CelerTerm.app\" --args --workspace \"Term\""));
+    }
+}
+
+#[test]
+fn test_generate_restart_script_multiple_workspaces_and_other_instances() {
+    use celerterm::update::generate_restart_script;
+
+    let script = generate_restart_script(
+        1001,
+        "/Applications/CelerTerm.app",
+        "/tmp/celerterm_update/CelerTerm.app",
+        &[2002, 3003],
+        &["Term".to_string(), "Agent".to_string()],
+    );
+
+    assert!(script.contains("kill -0 1001"));
+    #[cfg(target_os = "macos")]
+    {
+        assert!(script.contains("for p in 2002 3003; do kill -TERM $p"));
+        assert!(script.contains("rm -rf \"/Applications/CelerTerm.app\""));
+        assert!(script.contains("mv \"/tmp/celerterm_update/CelerTerm.app\" \"/Applications/CelerTerm.app\""));
+        assert!(script.contains("open -n \"/Applications/CelerTerm.app\" --args --workspace \"Term\""));
+        assert!(script.contains("open -n \"/Applications/CelerTerm.app\" --args --workspace \"Agent\""));
+    }
+}
+
+#[test]
+fn test_active_instances_registration_and_pruning() {
+    use celerterm::workspace::instances::{
+        ActiveInstance, load_instances_from_file, save_instances_to_file,
+    };
+    use tempfile::NamedTempFile;
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let temp_path = temp_file.path();
+
+    let initial = vec![
+        ActiveInstance {
+            pid: 999999, // Inactive / dead PID
+            workspace_name: "Old".to_string(),
+            workspace_id: "ws_old".to_string(),
+            updated_at: 100,
+        },
+        ActiveInstance {
+            pid: std::process::id(), // Active PID (current test runner process)
+            workspace_name: "Term".to_string(),
+            workspace_id: "ws_default".to_string(),
+            updated_at: 200,
+        },
+    ];
+
+    save_instances_to_file(&initial, temp_path).unwrap();
+
+    // Loading should prune the dead PID 999999 and retain only the living process PID
+    let loaded = load_instances_from_file(temp_path);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].pid, std::process::id());
+    assert_eq!(loaded[0].workspace_name, "Term");
+}
+
+

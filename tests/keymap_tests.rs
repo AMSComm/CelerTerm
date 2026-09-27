@@ -419,57 +419,76 @@ fn test_cmd_clipboard_and_utility_shortcuts() {
 
 #[test]
 fn test_vietnamese_ime_commit_decision_logic() {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum TestImeCommitAction {
+        Append(Vec<u8>),
+        Backspace,
+        None,
+    }
+
     fn process_ime_commit(
         had_preedit: bool,
         text: &str,
-        extra: Option<&[u8]>,
+        action: TestImeCommitAction,
     ) -> Vec<u8> {
         let mut out = text.as_bytes().to_vec();
         if had_preedit {
-            if let Some(extra_bytes) = extra {
-                if extra_bytes == [0x7f] {
-                    if !text.is_empty() {
-                        out.extend_from_slice(extra_bytes);
-                    }
-                } else {
-                    let extra_str = String::from_utf8_lossy(extra_bytes);
+            match action {
+                TestImeCommitAction::Append(extra) => {
+                    let extra_str = String::from_utf8_lossy(&extra);
                     if !text.ends_with(extra_str.as_ref()) {
-                        out.extend_from_slice(extra_bytes);
+                        out.extend_from_slice(&extra);
                     }
                 }
-            } else if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
-                out.push(b' ');
+                TestImeCommitAction::Backspace => {
+                    // Backspace is forwarded by WindowEvent::KeyboardInput which sends 0x7f.
+                    // We must NOT send 0x7f here (which would delete 2 characters),
+                    // and do NOT send fallback space (which would eat backspace and require 2 presses).
+                }
+                TestImeCommitAction::None => {
+                    if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
+                        out.push(b' ');
+                    }
+                }
             }
         }
         out
     }
 
     // 1. Vietnamese word committed with Space
-    let result_space = process_ime_commit(true, "tiếng", Some(b" "));
+    let result_space = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b" ".to_vec()));
     assert_eq!(String::from_utf8(result_space).unwrap(), "tiếng ");
 
     // 2. Vietnamese word committed with Enter
-    let result_enter = process_ime_commit(true, "tiếng", Some(b"\r"));
+    let result_enter = process_ime_commit(true, "tiếng", TestImeCommitAction::Append(b"\r".to_vec()));
     assert_eq!(String::from_utf8(result_enter).unwrap(), "tiếng\r");
 
     // 3. Fallback when extra key event was consumed: automatically adds Space
-    let result_fallback = process_ime_commit(true, "Việt", None);
+    let result_fallback = process_ime_commit(true, "Việt", TestImeCommitAction::None);
     assert_eq!(String::from_utf8(result_fallback).unwrap(), "Việt ");
 
     // 4. Committed text already ending in punctuation does not duplicate or add space
-    let result_punct = process_ime_commit(true, "tiếng.", Some(b"."));
+    let result_punct = process_ime_commit(true, "tiếng.", TestImeCommitAction::Append(b".".to_vec()));
     assert_eq!(String::from_utf8(result_punct).unwrap(), "tiếng.");
 
     // 5. Normal input without preedit (had_preedit = false) does not append anything
-    let result_normal = process_ime_commit(false, "abc", Some(b" "));
+    let result_normal = process_ime_commit(false, "abc", TestImeCommitAction::Append(b" ".to_vec()));
     assert_eq!(String::from_utf8(result_normal).unwrap(), "abc");
 
-    // 6. Vietnamese word committed with Backspace: consumes and applies backspace immediately
-    let result_backspace = process_ime_commit(true, "tiếng", Some(&[0x7f]));
-    assert_eq!(result_backspace, b"ti\xe1\xba\xbfng\x7f".to_vec());
+    // 6. Vietnamese word committed with Backspace:
+    // IME commit outputs only the committed text without space fallback;
+    // WindowEvent::KeyboardInput sends the single 0x7f right after.
+    let result_backspace = process_ime_commit(true, "tiếng", TestImeCommitAction::Backspace);
+    assert_eq!(String::from_utf8(result_backspace.clone()).unwrap(), "tiếng");
 
-    // 7. Empty preedit cancelled with Backspace: does not emit backspace to avoid deleting earlier text
-    let result_empty_backspace = process_ime_commit(true, "", Some(&[0x7f]));
+    // 7. Simulating full Backspace key sequence: IME commit + KeyboardInput
+    let mut terminal_input = result_backspace;
+    terminal_input.push(0x7f); // from WindowEvent::KeyboardInput
+    // Verifies that exactly ONE 0x7f is sent at the end of the committed word, preventing double character deletion!
+    assert_eq!(terminal_input, b"ti\xe1\xba\xbfng\x7f".to_vec());
+
+    // 8. Empty preedit cancelled with Backspace: does not emit extra bytes
+    let result_empty_backspace = process_ime_commit(true, "", TestImeCommitAction::Backspace);
     assert_eq!(result_empty_backspace, Vec::<u8>::new());
 }
 

@@ -23,7 +23,15 @@ use parking_lot::Mutex;
 use log::info;
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImeCommitAction {
+    Append(Vec<u8>),
+    Backspace,
+    None,
+}
+
 #[derive(Debug)]
+
 pub enum UserEvent {
     PtyOutput {
         tab_id: String,
@@ -196,7 +204,7 @@ impl CelerApp {
             config.font.ligatures,
         );
 
-        Self {
+        let app = Self {
             window: None,
             surface: None,
             config,
@@ -219,8 +227,15 @@ impl CelerApp {
             rows,
             is_secondary_window,
             deleted_workspace_ids: Vec::new(),
+        };
+
+        if let Some(active_ws) = app.workspace_mgr.get_active_workspace() {
+            crate::workspace::register_active_instance(std::process::id(), &active_ws.name, &active_ws.id);
         }
+
+        app
     }
+
 
     pub fn update_renderer(&mut self) {
         let effective_size = (self.config.font.size * self.scale_factor).max(8.0);
@@ -516,7 +531,12 @@ impl CelerApp {
                 info!("Saved workspace snapshot to {}", path.display());
             }
         }
+
+        if let Some(active_ws) = self.workspace_mgr.get_active_workspace() {
+            crate::workspace::register_active_instance(std::process::id(), &active_ws.name, &active_ws.id);
+        }
     }
+
 
     fn handle_modal_key(&mut self, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
         match &mut self.workspace_modal.mode {
@@ -702,7 +722,45 @@ impl CelerApp {
                 ..
             } => {
                 self.save_workspace_state();
-                if let Err(e) = crate::update::apply_update_and_restart(&staged_path, &target_path) {
+
+                // 1. Gather all active instances and running CelerTerm processes
+                let my_pid = std::process::id();
+                let instances = crate::workspace::get_all_active_instances();
+                let mut other_pids = crate::update::find_other_celerterm_pids();
+                for inst in &instances {
+                    if inst.pid != my_pid && !other_pids.contains(&inst.pid) {
+                        other_pids.push(inst.pid);
+                    }
+                }
+
+                // 2. Collect workspaces to reopen
+                let mut workspaces_to_reopen = Vec::new();
+                if let Some(active_ws) = self.workspace_mgr.get_active_workspace() {
+                    workspaces_to_reopen.push(active_ws.name.clone());
+                }
+                for inst in &instances {
+                    if inst.pid != my_pid && !workspaces_to_reopen.contains(&inst.workspace_name) {
+                        workspaces_to_reopen.push(inst.workspace_name.clone());
+                    }
+                }
+                // Fallback: If other CelerTerm processes were running but active_instances didn't have their workspace names,
+                // check if the workspace snapshot has additional workspaces not yet included
+                if workspaces_to_reopen.len() <= 1 && !other_pids.is_empty() {
+                    for ws in &self.workspace_mgr.workspaces {
+                        if !workspaces_to_reopen.contains(&ws.name) && workspaces_to_reopen.len() <= other_pids.len() {
+                            workspaces_to_reopen.push(ws.name.clone());
+                        }
+                    }
+                }
+
+                crate::workspace::unregister_active_instance(my_pid);
+
+                if let Err(e) = crate::update::apply_update_and_restart(
+                    &staged_path,
+                    &target_path,
+                    &other_pids,
+                    &workspaces_to_reopen,
+                ) {
                     log::error!("Failed to launch update script: {}", e);
                     self.update_modal.state = crate::update::UpdateState::Error(e);
                     if let Some(ref win) = self.window {
@@ -1025,21 +1083,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     // If text was committed from preedit, also send the commit key (Space, Return, Tab, punctuation)
                     // unless text already contains or ends with that suffix
                     if had_preedit {
-                        if let Some(extra) = get_ime_commit_extra() {
-                            if extra == [0x7f] {
-                                // If committed with Backspace, consume and apply backspace to the committed text
-                                if !text.is_empty() {
-                                    let _ = session.write_all(&extra);
-                                }
-                            } else {
+                        match get_ime_commit_action() {
+                            ImeCommitAction::Append(extra) => {
                                 let extra_str = String::from_utf8_lossy(&extra);
                                 if !text.ends_with(extra_str.as_ref()) {
                                     let _ = session.write_all(&extra);
                                 }
                             }
-                        } else if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
-                            // Default fallback for Vietnamese IME commit: space key
-                            let _ = session.write_all(b" ");
+                            ImeCommitAction::Backspace => {
+                                // Handled by WindowEvent::KeyboardInput (which sends 0x7f).
+                                // Do NOT append 0x7f here (would delete 2 characters),
+                                // and do NOT append fallback space (would require 2 backspace presses).
+                            }
+                            ImeCommitAction::None => {
+                                if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
+                                    // Default fallback for Vietnamese IME commit: space key
+                                    let _ = session.write_all(b" ");
+                                }
+                            }
                         }
                     }
                     let _ = session.flush();
@@ -1683,6 +1744,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if let Some(active_id) = self.active_tab_id() {
                                 if self.tab_sessions.len() <= 1 {
                                     self.save_workspace_state();
+                                    crate::workspace::unregister_active_instance(std::process::id());
                                     event_loop.exit();
                                     return;
                                 }
@@ -1705,6 +1767,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::Quit => {
                             self.save_workspace_state();
+                            crate::workspace::unregister_active_instance(std::process::id());
                             event_loop.exit();
                         }
                         KeyAction::NewWorkspace => {
@@ -3254,7 +3317,7 @@ fn is_ligature_punctuation(c: char) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn get_ime_commit_extra() -> Option<Vec<u8>> {
+fn get_ime_commit_action() -> ImeCommitAction {
     use objc2_app_kit::{NSApplication, NSEventType};
     use objc2_foundation::MainThreadMarker;
 
@@ -3277,19 +3340,19 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
                 if event.r#type() == NSEventType::KeyDown || event.r#type() == NSEventType::KeyUp {
                     let code = event.keyCode();
                     if code == 51 || code == 117 { // Backspace (kVK_Delete) / ForwardDelete
-                        return Some(vec![0x7f]);
+                        return ImeCommitAction::Backspace;
                     } else if code == 49 { // Space (kVK_Space)
-                        return Some(b" ".to_vec());
+                        return ImeCommitAction::Append(b" ".to_vec());
                     } else if code == 36 || code == 76 { // Return / KeypadEnter
-                        return Some(b"\r".to_vec());
+                        return ImeCommitAction::Append(b"\r".to_vec());
                     } else if code == 48 { // Tab
-                        return Some(b"\t".to_vec());
+                        return ImeCommitAction::Append(b"\t".to_vec());
                     } else if let Some(chars) = event.characters() {
                         let s = chars.to_string();
                         if s.len() == 1 {
                             let c = s.chars().next().unwrap();
                             if c.is_ascii_punctuation() {
-                                return Some(s.into_bytes());
+                                return ImeCommitAction::Append(s.into_bytes());
                             }
                         }
                     }
@@ -3300,25 +3363,26 @@ fn get_ime_commit_extra() -> Option<Vec<u8>> {
 
     // Hardware state fallback if event was already popped
     if is_key_down(51) || is_key_down(117) {
-        return Some(vec![0x7f]);
+        return ImeCommitAction::Backspace;
     }
     if is_key_down(49) {
-        return Some(b" ".to_vec());
+        return ImeCommitAction::Append(b" ".to_vec());
     }
     if is_key_down(36) || is_key_down(76) {
-        return Some(b"\r".to_vec());
+        return ImeCommitAction::Append(b"\r".to_vec());
     }
     if is_key_down(48) {
-        return Some(b"\t".to_vec());
+        return ImeCommitAction::Append(b"\t".to_vec());
     }
 
-    None
+    ImeCommitAction::None
 }
 
 #[cfg(not(target_os = "macos"))]
-fn get_ime_commit_extra() -> Option<Vec<u8>> {
-    None
+fn get_ime_commit_action() -> ImeCommitAction {
+    ImeCommitAction::None
 }
+
 
 fn draw_outline_rect(
     buffer: &mut [u32],
