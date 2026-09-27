@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-09-27
+
+### Fixed & Improved
+
+- **Multi-Window Workspace Synchronization & Deletion Persistence**:
+  - Resolved an issue where deleting a workspace in one window was not synchronized to other open windows and could be resurrected when another window saved its snapshot.
+  - Sourced authoritative unowned workspace state from disk in `merge_workspace_managers`, eliminating the fallback that restored deleted workspaces.
+  - Implemented high-performance mtime-guarded reload on window focus, before toggling the workspace modal, during frame rendering while the modal is open, and before cycling workspaces.
+  - Guaranteed clean termination of tab PTY sessions in memory when deleting a workspace.
+- **Software Update Modal Sizing & Overflow Protection**:
+  - Widened the Software Update dialog from `520px` to `640px` (+23% width) to comfortably accommodate long descriptions, release notes, and footer action buttons across both standard and Retina displays.
+  - Added safe UTF-8 character boundary truncation with ellipsis for dynamic strings (`status_text`, `target_line`, `err_line`) to guarantee zero text spillage outside modal bounds.
+  - Added boundary clamping for the release date string when rendered adjacent to version info.
+
 ## [0.2.7] - 2026-09-27
 
 ### Fixed & Improved
