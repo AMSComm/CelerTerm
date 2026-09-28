@@ -156,6 +156,17 @@ impl TermScreen {
         self.term.mode().contains(alacritty_terminal::term::TermMode::SGR_MOUSE)
     }
 
+    pub fn is_mouse_drag(&self) -> bool {
+        self.term.mode().intersects(
+            alacritty_terminal::term::TermMode::MOUSE_DRAG
+                | alacritty_terminal::term::TermMode::MOUSE_MOTION,
+        )
+    }
+
+    pub fn is_mouse_motion(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)
+    }
+
     pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
         self.term.selection = Some(Selection::new(ty, point, side));
         self.dirty = true;
@@ -488,3 +499,45 @@ impl TermScreen {
         (c, fg, bg)
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventKind {
+    Press,
+    Drag,
+    Move,
+    Release,
+}
+
+pub fn format_sgr_mouse(
+    btn: u8,
+    col: usize,
+    row: usize,
+    kind: MouseEventKind,
+    shift: bool,
+    alt: bool,
+    ctrl: bool,
+) -> String {
+    let mut code = match kind {
+        MouseEventKind::Press => btn,
+        MouseEventKind::Drag => btn + 32,
+        MouseEventKind::Move => 35, // 3 + 32
+        MouseEventKind::Release => btn,
+    };
+    if shift {
+        code += 4;
+    }
+    if alt {
+        code += 8;
+    }
+    if ctrl {
+        code += 16;
+    }
+
+    let suffix = match kind {
+        MouseEventKind::Release => 'm',
+        _ => 'M',
+    };
+
+    format!("\x1b[<{};{};{}{}", code, col, row, suffix)
+}
+

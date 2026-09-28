@@ -54,3 +54,103 @@ fn test_truecolor_24bit_rgb_and_box_drawing() {
     let line = screen.get_line_string(0);
     assert!(line.contains("┌─── CelerTerm Box ───┐"));
 }
+
+#[test]
+fn test_mouse_drag_and_motion_tracking_modes() {
+    let mut screen = TermScreen::new(80, 24);
+
+    // Initial state: no mouse modes
+    assert!(!screen.is_mouse_mode());
+    assert!(!screen.is_mouse_drag());
+    assert!(!screen.is_mouse_motion());
+
+    // Enable mode 1000 (MOUSE_REPORT_CLICK) + 1006 (SGR_MOUSE)
+    screen.process_bytes(b"\x1b[?1000h\x1b[?1006h");
+    assert!(screen.is_mouse_mode());
+    assert!(!screen.is_mouse_drag()); // Click only, not drag
+    assert!(!screen.is_mouse_motion());
+
+    // Enable mode 1002 (MOUSE_DRAG - used by Neovim set mouse=a)
+    screen.process_bytes(b"\x1b[?1002h");
+    assert!(screen.is_mouse_mode());
+    assert!(screen.is_mouse_drag());
+    assert!(!screen.is_mouse_motion());
+
+    // Enable mode 1003 (MOUSE_MOTION - all motion)
+    screen.process_bytes(b"\x1b[?1003h");
+    assert!(screen.is_mouse_mode());
+    assert!(screen.is_mouse_drag());
+    assert!(screen.is_mouse_motion());
+
+    // Disable all mouse modes
+    screen.process_bytes(b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l");
+    assert!(!screen.is_mouse_mode());
+    assert!(!screen.is_mouse_drag());
+    assert!(!screen.is_mouse_motion());
+}
+
+#[test]
+fn test_sgr_mouse_formatting_and_drag_encoding() {
+    use celerterm::term::{format_sgr_mouse, MouseEventKind};
+
+    // Left Button Press at col 10, line 5
+    assert_eq!(
+        format_sgr_mouse(0, 10, 5, MouseEventKind::Press, false, false, false),
+        "\x1b[<0;10;5M"
+    );
+
+    // Left Button Drag at col 15, line 6 (btn 0 + 32 = 32, suffix 'M')
+    assert_eq!(
+        format_sgr_mouse(0, 15, 6, MouseEventKind::Drag, false, false, false),
+        "\x1b[<32;15;6M"
+    );
+
+    // Left Button Drag with Alt (+8 -> 40)
+    assert_eq!(
+        format_sgr_mouse(0, 15, 6, MouseEventKind::Drag, false, true, false),
+        "\x1b[<40;15;6M"
+    );
+
+    // Left Button Drag with Ctrl (+16 -> 48)
+    assert_eq!(
+        format_sgr_mouse(0, 15, 6, MouseEventKind::Drag, false, false, true),
+        "\x1b[<48;15;6M"
+    );
+
+    // Left Button Release at col 15, line 6 (btn 0, suffix 'm')
+    assert_eq!(
+        format_sgr_mouse(0, 15, 6, MouseEventKind::Release, false, false, false),
+        "\x1b[<0;15;6m"
+    );
+
+    // Middle Button Press (btn 1, suffix 'M')
+    assert_eq!(
+        format_sgr_mouse(1, 20, 10, MouseEventKind::Press, false, false, false),
+        "\x1b[<1;20;10M"
+    );
+
+    // Middle Button Drag (btn 1 + 32 = 33, suffix 'M')
+    assert_eq!(
+        format_sgr_mouse(1, 22, 10, MouseEventKind::Drag, false, false, false),
+        "\x1b[<33;22;10M"
+    );
+
+    // Right Button Press (btn 2, suffix 'M')
+    assert_eq!(
+        format_sgr_mouse(2, 30, 12, MouseEventKind::Press, false, false, false),
+        "\x1b[<2;30;12M"
+    );
+
+    // Right Button Drag (btn 2 + 32 = 34, suffix 'M')
+    assert_eq!(
+        format_sgr_mouse(2, 35, 12, MouseEventKind::Drag, false, false, false),
+        "\x1b[<34;35;12M"
+    );
+
+    // Mouse Move with no button in mode 1003 (code 35, suffix 'M')
+    assert_eq!(
+        format_sgr_mouse(0, 40, 20, MouseEventKind::Move, false, false, false),
+        "\x1b[<35;40;20M"
+    );
+}
+

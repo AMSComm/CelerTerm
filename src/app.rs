@@ -165,6 +165,8 @@ pub struct CelerApp {
     modifiers: ModifiersState,
     proxy: Option<EventLoopProxy<UserEvent>>,
     mouse_pos: (f64, f64),
+    mouse_pressed_button: Option<MouseButton>,
+    last_reported_mouse_grid: Option<(usize, usize)>,
     is_selecting: bool,
     last_click: Option<(std::time::Instant, Point)>,
     click_count: usize,
@@ -288,6 +290,8 @@ impl CelerApp {
             modifiers: ModifiersState::default(),
             proxy: None,
             mouse_pos: (0.0, 0.0),
+            mouse_pressed_button: None,
+            last_reported_mouse_grid: None,
             is_selecting: false,
             last_click: None,
             click_count: 0,
@@ -1398,6 +1402,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
                 } else {
                     self.is_selecting = false;
+                    self.mouse_pressed_button = None;
+                    self.last_reported_mouse_grid = None;
                     self.modifiers = ModifiersState::default();
                 }
             }
@@ -1465,6 +1471,63 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         session.screen.update_selection(point, side);
                         if let Some(ref win) = self.window {
                             win.request_redraw();
+                        }
+                    }
+                } else if let Some(active_id) = self.active_tab_id()
+                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                    && session.screen.is_mouse_mode()
+                    && !self.modifiers.shift_key()
+                {
+                    let cell_w = self.renderer.cell_width;
+                    let cell_h = self.renderer.cell_height;
+                    let cols = session.screen.size.columns;
+                    let lines = session.screen.size.lines;
+
+                    if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
+                        let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                        let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                        let start_y = header_h + pad_y;
+
+                        let mx = self.mouse_pos.0 as f32;
+                        let my = self.mouse_pos.1 as f32;
+
+                        let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32) as usize;
+                        let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32) as usize;
+
+                        if let Some(pressed_btn) = self.mouse_pressed_button {
+                            if session.screen.is_mouse_drag() && self.last_reported_mouse_grid != Some((col, row)) {
+                                self.last_reported_mouse_grid = Some((col, row));
+                                let btn_num = match pressed_btn {
+                                    MouseButton::Left => 0,
+                                    MouseButton::Middle => 1,
+                                    MouseButton::Right => 2,
+                                    _ => 0,
+                                };
+                                let payload = crate::term::format_sgr_mouse(
+                                    btn_num,
+                                    col,
+                                    row,
+                                    crate::term::MouseEventKind::Drag,
+                                    self.modifiers.shift_key(),
+                                    self.modifiers.alt_key(),
+                                    self.modifiers.control_key(),
+                                );
+                                let _ = session.write_all(payload.as_bytes());
+                                let _ = session.flush();
+                            }
+                        } else if session.screen.is_mouse_motion() && self.last_reported_mouse_grid != Some((col, row)) {
+                            self.last_reported_mouse_grid = Some((col, row));
+                            let payload = crate::term::format_sgr_mouse(
+                                0,
+                                col,
+                                row,
+                                crate::term::MouseEventKind::Move,
+                                self.modifiers.shift_key(),
+                                self.modifiers.alt_key(),
+                                self.modifiers.control_key(),
+                            );
+                            let _ = session.write_all(payload.as_bytes());
+                            let _ = session.flush();
                         }
                     }
                 } else if (self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.app_menu_open)
@@ -2278,7 +2341,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
 
                     // Check click in terminal area
-                    if my > header.height && button == MouseButton::Left {
+                    if my > header.height {
+                        let btn_code = match button {
+                            MouseButton::Left => Some(0),
+                            MouseButton::Middle => Some(1),
+                            MouseButton::Right => Some(2),
+                            _ => None,
+                        };
+
                         let pad_x = (self.config.window.padding_x * self.scale_factor).round();
                         let pad_y = (self.config.window.padding_y * self.scale_factor).round();
                         let start_y = header.height + pad_y;
@@ -2294,11 +2364,25 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                             if cols > 0 && lines > 0 {
                                 if session.screen.is_mouse_mode() && !self.modifiers.shift_key() {
-                                    let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32);
-                                    let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32);
-                                    let _ = session.write_all(format!("\x1b[<0;{};{}M", col, row).as_bytes());
-                                    let _ = session.flush();
-                                } else {
+                                    if let Some(btn_num) = btn_code {
+                                        self.mouse_pressed_button = Some(button);
+                                        let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32) as usize;
+                                        let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32) as usize;
+                                        self.last_reported_mouse_grid = Some((col, row));
+
+                                        let payload = crate::term::format_sgr_mouse(
+                                            btn_num,
+                                            col,
+                                            row,
+                                            crate::term::MouseEventKind::Press,
+                                            self.modifiers.shift_key(),
+                                            self.modifiers.alt_key(),
+                                            self.modifiers.control_key(),
+                                        );
+                                        let _ = session.write_all(payload.as_bytes());
+                                        let _ = session.flush();
+                                    }
+                                } else if button == MouseButton::Left {
                                     let c = (((mx - pad_x) / cell_w).floor() as i32).clamp(0, cols as i32 - 1) as usize;
                                     let l = (((my - start_y) / cell_h).floor() as i32).clamp(0, lines as i32 - 1) as usize;
                                     let side = if (mx - pad_x) - (c as f32 * cell_w) < cell_w * 0.5 {
@@ -2344,44 +2428,65 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                     }
-                } else if state == ElementState::Released && button == MouseButton::Left {
-                if self.is_selecting {
-                    self.is_selecting = false;
-                    if let Some(active_id) = self.active_tab_id()
+                } else if state == ElementState::Released {
+                    self.mouse_pressed_button = None;
+                    self.last_reported_mouse_grid = None;
+
+                    if self.is_selecting && button == MouseButton::Left {
+                        self.is_selecting = false;
+                        if let Some(active_id) = self.active_tab_id()
+                            && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                        {
+                            if let Some(ref sel) = session.screen.term.selection {
+                                if sel.is_empty() {
+                                    session.screen.clear_selection();
+                                }
+                            }
+                        }
+                        window.request_redraw();
+                    } else if let Some(active_id) = self.active_tab_id()
                         && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                        && session.screen.is_mouse_mode()
+                        && !self.modifiers.shift_key()
                     {
-                        if let Some(ref sel) = session.screen.term.selection {
-                            if sel.is_empty() {
-                                session.screen.clear_selection();
+                        let btn_code = match button {
+                            MouseButton::Left => Some(0),
+                            MouseButton::Middle => Some(1),
+                            MouseButton::Right => Some(2),
+                            _ => None,
+                        };
+
+                        if let Some(btn_num) = btn_code {
+                            let header_h = if self.config.window.tabs_in_titlebar {
+                                (26.0 * self.scale_factor.max(1.0)).round()
+                            } else {
+                                0.0
+                            };
+                            let pad_x = (self.config.window.padding_x * self.scale_factor).round();
+                            let pad_y = (self.config.window.padding_y * self.scale_factor).round();
+                            let start_y = header_h + pad_y;
+                            let cell_w = self.renderer.cell_width;
+                            let cell_h = self.renderer.cell_height;
+                            let cols = session.screen.size.columns;
+                            let lines = session.screen.size.lines;
+                            if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
+                                let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32) as usize;
+                                let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32) as usize;
+                                let payload = crate::term::format_sgr_mouse(
+                                    btn_num,
+                                    col,
+                                    row,
+                                    crate::term::MouseEventKind::Release,
+                                    self.modifiers.shift_key(),
+                                    self.modifiers.alt_key(),
+                                    self.modifiers.control_key(),
+                                );
+                                let _ = session.write_all(payload.as_bytes());
+                                let _ = session.flush();
                             }
                         }
                     }
-                    window.request_redraw();
-                } else if let Some(active_id) = self.active_tab_id()
-                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
-                    && session.screen.is_mouse_mode()
-                    && !self.modifiers.shift_key()
-                {
-                    let header_h = if self.config.window.tabs_in_titlebar {
-                        (26.0 * self.scale_factor.max(1.0)).round()
-                    } else {
-                        0.0
-                    };
-                    let pad_x = (self.config.window.padding_x * self.scale_factor).round();
-                    let pad_y = (self.config.window.padding_y * self.scale_factor).round();
-                    let start_y = header_h + pad_y;
-                    let cell_w = self.renderer.cell_width;
-                    let cell_h = self.renderer.cell_height;
-                    let cols = session.screen.size.columns;
-                    let lines = session.screen.size.lines;
-                    if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
-                        let col = (((mx - pad_x) / cell_w).floor() as i32 + 1).clamp(1, cols as i32);
-                        let row = (((my - start_y) / cell_h).floor() as i32 + 1).clamp(1, lines as i32);
-                        let _ = session.write_all(format!("\x1b[<0;{};{}m", col, row).as_bytes());
-                        let _ = session.flush();
-                    }
                 }
-            }
         }
     }
             WindowEvent::KeyboardInput {
