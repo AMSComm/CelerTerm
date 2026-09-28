@@ -30,6 +30,7 @@ pub enum ImeCommitAction {
     Enter,
     ShiftEnter,
     Confirm,
+    Escape,
     None,
 }
 
@@ -173,6 +174,7 @@ pub struct CelerApp {
     ime_preedit: Option<(String, Option<(usize, usize)>)>,
     last_preedit: Option<(String, std::time::Instant)>,
     last_ime_confirm: Option<std::time::Instant>,
+    last_ime_escape: Option<std::time::Instant>,
     scale_factor: f32,
     cols: usize,
     rows: usize,
@@ -298,6 +300,7 @@ impl CelerApp {
             ime_preedit: None,
             last_preedit: None,
             last_ime_confirm: None,
+            last_ime_escape: None,
             scale_factor: 1.0,
             cols,
             rows,
@@ -1595,6 +1598,11 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             ImeCommitAction::Confirm => {
                                 self.last_ime_confirm = Some(std::time::Instant::now());
                             }
+                            ImeCommitAction::Escape => {
+                                // Escape was pressed during IME preedit: text is committed, followed by ESC byte
+                                let _ = session.write_all(b"\x1b");
+                                self.last_ime_escape = Some(std::time::Instant::now());
+                            }
                             ImeCommitAction::None => {
                                 if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
                                     // Default fallback for Vietnamese IME commit: space key
@@ -1615,7 +1623,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
                 if text.is_empty() {
+                    #[cfg(target_os = "macos")]
+                    let was_preedit = self.ime_preedit.is_some()
+                        || self.last_preedit.as_ref().map(|(_, t)| t.elapsed() < std::time::Duration::from_millis(500)).unwrap_or(false);
+
                     self.ime_preedit = None;
+
+                    #[cfg(target_os = "macos")]
+                    if was_preedit && is_escape_key_down() {
+                        // When Escape is pressed during preedit, macOS IME cancels/clears preedit
+                        // and winit suppresses the KeyboardInput event. Forward ESC byte to PTY!
+                        if let Some(active_id) = self.active_tab_id()
+                            && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                        {
+                            let _ = session.write_all(b"\x1b");
+                            let _ = session.flush();
+                            self.last_ime_escape = Some(std::time::Instant::now());
+                        }
+                    }
                 } else {
                     self.last_preedit = Some((text.clone(), std::time::Instant::now()));
                     self.ime_preedit = Some((text, cursor_range));
@@ -2530,9 +2555,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
-                if self.app_menu_open
-                    && matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape))
-                {
+                let is_escape_key = matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape))
+                    || matches!(logical_key, winit::keyboard::Key::Character(ref s) if s == "\x1b" || s == "\u{1b}")
+                    || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Escape));
+
+                if is_escape_key {
+                    if let Some(t) = self.last_ime_escape.take() {
+                        if t.elapsed() < std::time::Duration::from_millis(150) {
+                            // This Escape key was already consumed by IME to commit or clear preedit text.
+                            // Do NOT forward duplicate ESC to the terminal.
+                            if let Some(ref win) = window {
+                                win.request_redraw();
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                if self.app_menu_open && is_escape_key {
                     self.app_menu_open = false;
                     if let Some(ref win) = window {
                         win.request_redraw();
@@ -4936,6 +4976,8 @@ fn get_ime_commit_action() -> ImeCommitAction {
                         }
                     } else if code == 48 { // Tab
                         return ImeCommitAction::Append(b"\t".to_vec());
+                    } else if code == 53 { // Escape (kVK_Escape)
+                        return ImeCommitAction::Escape;
                     } else if let Some(chars) = event.characters() {
                         let s = chars.to_string();
                         if !s.is_empty() {
@@ -4969,6 +5011,9 @@ fn get_ime_commit_action() -> ImeCommitAction {
     if is_key_down(48) {
         return ImeCommitAction::Append(b"\t".to_vec());
     }
+    if is_key_down(53) {
+        return ImeCommitAction::Escape;
+    }
     const DIGIT_KEYS: &[(u16, u8)] = &[
         (29, b'0'), (82, b'0'),
         (18, b'1'), (83, b'1'),
@@ -4988,6 +5033,34 @@ fn get_ime_commit_action() -> ImeCommitAction {
     }
 
     ImeCommitAction::None
+}
+
+#[cfg(target_os = "macos")]
+fn is_escape_key_down() -> bool {
+    use objc2_app_kit::{NSApplication, NSEventType};
+    use objc2_foundation::MainThreadMarker;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
+    }
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        let app = NSApplication::sharedApplication(mtm);
+        if let Some(event) = app.currentEvent() {
+            unsafe {
+                if (event.r#type() == NSEventType::KeyDown || event.r#type() == NSEventType::KeyUp)
+                    && event.keyCode() == 53
+                {
+                    return true;
+                }
+            }
+        }
+    }
+
+    unsafe {
+        CGEventSourceKeyState(0, 53) || CGEventSourceKeyState(1, 53)
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

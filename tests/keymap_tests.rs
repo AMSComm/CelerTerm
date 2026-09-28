@@ -428,6 +428,7 @@ fn test_vietnamese_ime_commit_decision_logic() {
         Enter,
         ShiftEnter,
         Confirm,
+        Escape,
         None,
     }
 
@@ -467,6 +468,9 @@ fn test_vietnamese_ime_commit_decision_logic() {
                 }
                 TestImeCommitAction::Confirm => {
                     // Confirm only
+                }
+                TestImeCommitAction::Escape => {
+                    out.push(0x1b);
                 }
                 TestImeCommitAction::None => {
                     if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
@@ -547,7 +551,16 @@ fn test_vietnamese_ime_commit_decision_logic() {
     let result_empty_backspace = process_ime_commit(true, "", TestImeCommitAction::Backspace, false);
     assert_eq!(result_empty_backspace, Vec::<u8>::new());
 
-    // 14. Verify is_japanese_char character classifications
+    // 14. Vietnamese word committed with Escape (e.g. exit insert mode in nvim):
+    // commits text and forwards ESC (\x1b)
+    let result_escape = process_ime_commit(true, "tiếng", TestImeCommitAction::Escape, false);
+    assert_eq!(result_escape, b"ti\xe1\xba\xbfng\x1b".to_vec());
+
+    // 15. Empty preedit cancelled with Escape: sends ESC (\x1b) to exit insert mode in nvim
+    let result_empty_escape = process_ime_commit(true, "", TestImeCommitAction::Escape, false);
+    assert_eq!(result_empty_escape, vec![0x1b]);
+
+    // 16. Verify is_japanese_char character classifications
     assert!(is_japanese_char('あ'));
     assert!(is_japanese_char('ん'));
     assert!(is_japanese_char('ア'));
@@ -560,6 +573,67 @@ fn test_vietnamese_ime_commit_decision_logic() {
     assert!(!is_japanese_char('ế'));
     assert!(!is_japanese_char('đ'));
     assert!(!is_japanese_char('ư'));
+}
+
+#[test]
+fn test_escape_key_translation() {
+    use winit::keyboard::{KeyCode, NativeKey};
+
+    let default_mods = Modifiers::default();
+
+    // 1. Standard NamedKey::Escape -> 0x1b
+    assert_eq!(
+        translate_key_event(&Key::Named(NamedKey::Escape), None, default_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
+
+    // 2. Physical KeyCode::Escape with NamedKey -> 0x1b
+    assert_eq!(
+        translate_key_event(&Key::Named(NamedKey::Escape), Some(KeyCode::Escape), default_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
+
+    // 3. Raw Escape character \x1b -> 0x1b
+    assert_eq!(
+        translate_key_event(&Key::Character("\x1b".into()), None, default_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
+
+    // 4. Physical KeyCode::Escape even if Key is Unidentified on macOS -> 0x1b
+    assert_eq!(
+        translate_key_event(&Key::Unidentified(NativeKey::MacOS(53)), Some(KeyCode::Escape), default_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
+
+    // 5. Shift + Escape -> 0x1b
+    let shift_mods = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        translate_key_event(&Key::Named(NamedKey::Escape), Some(KeyCode::Escape), shift_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
+
+    // 6. Option / Alt + Escape -> 0x1b 0x1b (ESC ESC)
+    let alt_mods = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        translate_key_event(&Key::Named(NamedKey::Escape), Some(KeyCode::Escape), alt_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b, 0x1b]))
+    );
+
+    // 7. Ctrl + Escape -> 0x1b
+    let ctrl_mods = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        translate_key_event(&Key::Named(NamedKey::Escape), Some(KeyCode::Escape), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
 }
 
 #[test]

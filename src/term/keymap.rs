@@ -101,6 +101,19 @@ pub fn translate_key_event(
         }
     }
 
+    // 0.05 Dedicated Escape key handling (handles NamedKey, KeyCode::Escape, and raw ESC character \x1b)
+    let is_escape = matches!(key, Key::Named(NamedKey::Escape))
+        || matches!(key, Key::Character(s) if s == "\x1b" || s == "\u{1b}")
+        || physical_key == Some(KeyCode::Escape);
+
+    if is_escape && !mods.logo {
+        if mods.alt {
+            return Some(KeyAction::Bytes(vec![0x1b, 0x1b]));
+        } else {
+            return Some(KeyAction::Bytes(vec![0x1b]));
+        }
+    }
+
     // 0.1 Control + Shift combinations (cross-platform shortcuts)
     if mods.ctrl && mods.shift && !mods.alt && !mods.logo {
         if let Key::Character(ch) = key {
