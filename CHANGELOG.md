@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-09-28
+
+### Added
+
+- **Workspace Environment Variables**:
+  - Automatically exports `$CELERTERM_WORKSPACE` (workspace name), `$CELER_WORKSPACE` (convenient alias for prompt customizations), and `$CELERTERM_WORKSPACE_ID` (unique identifier) into every spawned shell/PTY session.
+  - Dynamically synchronizes host process and child environment variables when switching, creating, or renaming workspaces.
+- **macOS Workspace Visibility & Multi-Window Switching**:
+  - **Application Switcher (`Cmd + Tab`)**: Sets `NSProcessInfo.processName` to `CelerTerm (<Workspace Name>)` (e.g. `CelerTerm (Backend)`), allowing instant differentiation between multiple workspace windows in macOS `Cmd + Tab`.
+  - **Dock Badge (`NSDockTile`)**: Directly displays the active workspace name on the red Dock badge for each CelerTerm window.
+  - **Window Title & Mission Control**: Window titles now display `CelerTerm - <Workspace Name>` for clear identification in Mission Control, Dock right-click window menus, and third-party window switchers (AltTab, Raycast).
+  - **Application Menu**: Reflects `CelerTerm (<Workspace Name>)` in the macOS top system menu bar.
+  - **Direct Window Cycling Shortcut (`Cmd + \``)**: Native macOS window cycling shortcut (`Cmd + Backtick / Tilde`) to seamlessly rotate focus across all active CelerTerm workspace windows.
+
+### Fixed & Improved
+
+- **Smooth Mouse Drag Selection in Neovim & TUI (SGR 1006 / 1002)**:
+  - Fixed an issue where dragging to select text in Neovim (`set mouse=a`) or other TUI applications did not update the visual selection smoothly, only snapping to the selection after the mouse button was released.
+  - Implemented real-time SGR mouse drag (`\x1b[<32;col;rowM`) and motion reporting in `WindowEvent::CursorMoved` with character cell boundary deduplication to prevent PTY flooding while delivering silky-smooth 60-120 FPS visual updates.
+  - Expanded mouse input handling to fully support Left, Middle, and Right mouse buttons and modifier keys, with `Shift` bypass for native terminal clipboard selection.
+
 ## [0.2.9] - 2026-09-28
 
 ### Added
