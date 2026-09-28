@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.12] - 2026-09-28
+
+### Added & Improved
+
+- **Modern Terminal App Icon**:
+  - Redesigned CelerTerm application icon following macOS Big Sur+ Human Interface Guidelines (1024x1024 Squircle).
+  - Unmistakable terminal emulator motif: classic prompt chevron `>` with a luminous cursor block `_` set against a deep obsidian console screen with subtle glass rim highlights and window control accents.
+  - Distinctive supersonic aerodynamic speed streaks sculpt the prompt chevron in vibrant electric cyan and radiant azure, symbolizing swift GPU acceleration and the "Celer" identity.
+  - Bundled high-resolution multi-size `AppIcon.icns` (16x16 to 1024x1024) and crisp alpha master `icon.png`.
+
+### Fixed
+
+- **macOS Escape Key & Neovim Normal Mode**:
+  - Resolved an issue on macOS where pressing the Escape key (especially in Neovim or during IME text input) failed to register or erroneously inserted a whitespace character instead of exiting Insert mode.
+  - Added dedicated `ImeCommitAction::Escape` to detect `keyCode == 53` during IME preedit commit and immediately forward the `\x1b` (ESC) byte to the PTY.
+  - Handled IME preedit cancellation by forwarding `\x1b` when the user cancels preedit using the Escape key.
+  - Implemented 150ms trailing debounce protection (`last_ime_escape`) to prevent duplicate escape sequences from trailing OS keyboard events.
+  - Enhanced `translate_key_event` to universally capture `KeyCode::Escape`, raw `\x1b` characters, and `Option + Escape` (`\x1b\x1b`).
+
 ## [0.2.11] - 2026-09-28
 
 ### Changed & Improved
