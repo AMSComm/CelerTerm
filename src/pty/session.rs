@@ -13,6 +13,16 @@ pub struct PtySession {
 
 impl PtySession {
     pub fn spawn(cols: u16, rows: u16, cwd: Option<&Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::spawn_with_workspace(cols, rows, cwd, None, None)
+    }
+
+    pub fn spawn_with_workspace(
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+        ws_name: Option<&str>,
+        ws_id: Option<&str>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -30,6 +40,21 @@ impl PtySession {
         cmd.env("COLORTERM", "truecolor");
         cmd.env("TERM_PROGRAM", "CelerTerm");
         cmd.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
+
+        // Assign workspace name and id to environment variables
+        if let Some(ws) = ws_name {
+            cmd.env("CELERTERM_WORKSPACE", ws);
+            cmd.env("CELER_WORKSPACE", ws);
+        } else if let Ok(ws) = std::env::var("CELERTERM_WORKSPACE") {
+            cmd.env("CELERTERM_WORKSPACE", &ws);
+            cmd.env("CELER_WORKSPACE", &ws);
+        }
+
+        if let Some(id) = ws_id {
+            cmd.env("CELERTERM_WORKSPACE_ID", id);
+        } else if let Ok(id) = std::env::var("CELERTERM_WORKSPACE_ID") {
+            cmd.env("CELERTERM_WORKSPACE_ID", &id);
+        }
 
         let bootstrapped_path = get_bootstrapped_path();
         cmd.env("PATH", &bootstrapped_path);

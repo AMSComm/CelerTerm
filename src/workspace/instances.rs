@@ -160,6 +160,29 @@ pub fn focus_instance(pid: u32) -> bool {
     }
 }
 
+pub fn cycle_next_instance_in(instances: &[ActiveInstance], my_pid: u32) -> Option<u32> {
+    if instances.len() <= 1 {
+        return None;
+    }
+    let mut sorted = instances.to_vec();
+    sorted.sort_by_key(|i| i.pid);
+    if let Some(pos) = sorted.iter().position(|i| i.pid == my_pid) {
+        let next_idx = (pos + 1) % sorted.len();
+        Some(sorted[next_idx].pid)
+    } else {
+        sorted.first().map(|i| i.pid)
+    }
+}
+
+pub fn cycle_next_instance(my_pid: u32) -> bool {
+    let instances = get_all_active_instances();
+    if let Some(next_pid) = cycle_next_instance_in(&instances, my_pid) {
+        focus_instance(next_pid)
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +222,42 @@ mod tests {
 
         // Non-existent workspace
         assert_eq!(find_other_instance_in(&instances, 1001, "ws-99", "Unknown"), None);
+    }
+
+    #[test]
+    fn test_cycle_next_instance_in() {
+        let instances = vec![
+            ActiveInstance {
+                pid: 1001,
+                workspace_name: "Dev".to_string(),
+                workspace_id: "ws-1".to_string(),
+                updated_at: 100,
+            },
+            ActiveInstance {
+                pid: 1002,
+                workspace_name: "Backend".to_string(),
+                workspace_id: "ws-2".to_string(),
+                updated_at: 200,
+            },
+            ActiveInstance {
+                pid: 1003,
+                workspace_name: "Frontend".to_string(),
+                workspace_id: "ws-3".to_string(),
+                updated_at: 300,
+            },
+        ];
+
+        // Cycling from 1001 goes to 1002
+        assert_eq!(cycle_next_instance_in(&instances, 1001), Some(1002));
+        // Cycling from 1002 goes to 1003
+        assert_eq!(cycle_next_instance_in(&instances, 1002), Some(1003));
+        // Cycling from 1003 wraps around to 1001
+        assert_eq!(cycle_next_instance_in(&instances, 1003), Some(1001));
+
+        // Single instance should return None (nowhere to cycle)
+        assert_eq!(cycle_next_instance_in(&instances[..1], 1001), None);
+        // Empty instances returns None
+        assert_eq!(cycle_next_instance_in(&[], 1001), None);
     }
 }
 

@@ -306,7 +306,34 @@ impl CelerApp {
             crate::workspace::register_active_instance(std::process::id(), &active_ws.name, &active_ws.id);
         }
 
+        app.update_window_and_process_title();
+
         app
+    }
+
+    /// Synchronizes process name, dock badge, window title, and environment variables
+    /// with the currently active workspace.
+    pub fn update_window_and_process_title(&self) {
+        if let Some(active_ws) = self.workspace_mgr.get_active_workspace() {
+            let ws_name = &active_ws.name;
+            crate::workspace::register_active_instance(std::process::id(), ws_name, &active_ws.id);
+            unsafe {
+                std::env::set_var("CELERTERM_WORKSPACE", ws_name);
+                std::env::set_var("CELER_WORKSPACE", ws_name);
+                std::env::set_var("CELERTERM_WORKSPACE_ID", &active_ws.id);
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                crate::window::macos::set_macos_process_name(&format!("CelerTerm ({})", ws_name));
+                crate::window::macos::set_macos_dock_badge(Some(ws_name));
+                crate::window::macos::set_macos_menu_title(&format!("CelerTerm ({})", ws_name));
+            }
+
+            if let Some(ref window) = self.window {
+                window.set_title(&format!("CelerTerm - {}", ws_name));
+            }
+        }
     }
 
 
@@ -390,7 +417,13 @@ impl CelerApp {
     }
 
     pub fn spawn_tab_session(&mut self, tab_id: &str, cwd: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
-        let mut pty = PtySession::spawn(self.cols as u16, self.rows as u16, cwd)?;
+        let ws_info = self.workspace_mgr.workspaces.iter()
+            .find(|ws| ws.tabs.iter().any(|t| t.id == tab_id))
+            .or_else(|| self.workspace_mgr.get_active_workspace());
+        let ws_name = ws_info.map(|w| w.name.as_str());
+        let ws_id = ws_info.map(|w| w.id.as_str());
+
+        let mut pty = PtySession::spawn_with_workspace(self.cols as u16, self.rows as u16, cwd, ws_name, ws_id)?;
         let mut screen = TermScreen::new(self.cols, self.rows);
         let writer = Arc::new(Mutex::new(pty.writer));
         screen.set_pty_writer(writer.clone());
@@ -646,6 +679,7 @@ impl CelerApp {
         if let Some(active_ws) = self.workspace_mgr.get_active_workspace() {
             crate::workspace::register_active_instance(std::process::id(), &active_ws.name, &active_ws.id);
         }
+        self.update_window_and_process_title();
     }
 
     /// Attempts to switch to target workspace. If it is already open in another window,
@@ -1284,8 +1318,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             return;
         }
 
+        let active_ws_name = self.workspace_mgr.get_active_workspace()
+            .map(|w| w.name.clone())
+            .unwrap_or_else(|| "CelerTerm".to_string());
+        let win_title = format!("CelerTerm - {}", active_ws_name);
+
         let mut attrs = WindowAttributes::default()
-            .with_title("CelerTerm")
+            .with_title(win_title)
             .with_inner_size(winit::dpi::LogicalSize::new(980.0, 620.0));
 
         attrs = configure_macos_window(attrs, &self.config.window, self.config.macos.option_as_alt);
@@ -1326,6 +1365,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                 self.surface = Some(surface);
                 self.window = Some(window);
+                self.update_window_and_process_title();
                 #[cfg(target_os = "macos")]
                 crate::window::macos::set_macos_app_icon(include_bytes!("../assets/icon.png"));
                 info!("CelerTerm initialized successfully.");
@@ -2519,6 +2559,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     win.request_redraw();
                                 }
                             }
+                        }
+                        KeyAction::CycleNextWindow => {
+                            crate::workspace::cycle_next_instance(std::process::id());
                         }
                         KeyAction::ToggleWorkspaceModal => {
                             self.reload_workspaces_from_disk();

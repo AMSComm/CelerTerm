@@ -128,3 +128,45 @@ fn test_pty_login_shell_and_path_bootstrap() {
         assert!(output.contains("/opt/homebrew/bin"), "Spawned login shell must have /opt/homebrew/bin in PATH");
     }
 }
+
+#[test]
+fn test_pty_workspace_env_variables() {
+    let mut pty = PtySession::spawn_with_workspace(
+        80,
+        24,
+        None,
+        Some("AlphaWs"),
+        Some("alpha-id-123"),
+    ).expect("Pty spawn with workspace succeeds");
+    let mut screen = TermScreen::new(80, 24);
+
+    pty.write_all(b"echo CELER_TEST_OUT=[$CELERTERM_WORKSPACE][$CELER_WORKSPACE][$CELERTERM_WORKSPACE_ID]\n")
+        .expect("Write to pty succeeds");
+
+    let mut buf = [0u8; 1024];
+    let start = Instant::now();
+    let timeout = Duration::from_secs(8);
+    let mut output = String::new();
+
+    while start.elapsed() < timeout {
+        match pty.reader.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                screen.process_bytes(&buf[..n]);
+                let text = screen.get_screen_text().join(" ");
+                if text.contains("CELER_TEST_OUT=[AlphaWs][AlphaWs][alpha-id-123]") {
+                    output = text;
+                    break;
+                }
+            }
+            Ok(_) => break,
+            Err(_) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+
+    assert!(
+        output.contains("CELER_TEST_OUT=[AlphaWs][AlphaWs][alpha-id-123]"),
+        "Spawned PTY must receive CELERTERM_WORKSPACE, CELER_WORKSPACE, and CELERTERM_WORKSPACE_ID"
+    );
+}

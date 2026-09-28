@@ -10,5 +10,6 @@ pub use instances::{
     ActiveInstance, get_default_instances_path, get_all_active_instances,
     register_active_instance, unregister_active_instance, is_process_alive,
     focus_instance, find_other_instance_in, find_other_instance_for_workspace,
+    cycle_next_instance, cycle_next_instance_in,
 };
 

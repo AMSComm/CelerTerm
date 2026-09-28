@@ -1,4 +1,4 @@
-use celerterm::term::keymap::{translate_key, Modifiers, KeyAction};
+use celerterm::term::keymap::{translate_key, translate_key_event, Modifiers, KeyAction};
 use winit::keyboard::{Key, NamedKey};
 
 #[test]
@@ -683,5 +683,42 @@ fn test_customize_tab_color_shortcuts() {
         Some(KeyAction::CustomizeTabColor)
     );
 }
+
+#[test]
+fn test_cmd_backquote_cycle_next_window() {
+    use winit::keyboard::KeyCode;
+
+    let cmd_mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        logo: true,
+    };
+
+    // Cmd + Backquote physical key
+    assert_eq!(
+        translate_key_event(&Key::Character("`".into()), Some(KeyCode::Backquote), cmd_mods, true),
+        Some(KeyAction::CycleNextWindow)
+    );
+
+    // Cmd + ` character key without physical key
+    assert_eq!(
+        translate_key(&Key::Character("`".into()), cmd_mods, true),
+        Some(KeyAction::CycleNextWindow)
+    );
+
+    // Cmd + ~ (with shift)
+    let cmd_shift = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        logo: true,
+    };
+    assert_eq!(
+        translate_key(&Key::Character("~".into()), cmd_shift, true),
+        Some(KeyAction::CycleNextWindow)
+    );
+}
+
 
 

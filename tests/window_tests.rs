@@ -205,3 +205,12 @@ fn test_live_modifiers() {
     }
 }
 
+#[test]
+fn test_macos_window_helpers_safe_execution() {
+    celerterm::window::set_macos_process_name("CelerTerm (Test)");
+    celerterm::window::set_macos_dock_badge(Some("Test"));
+    celerterm::window::set_macos_dock_badge(None);
+    celerterm::window::set_macos_menu_title("CelerTerm (Test)");
+}
+
+

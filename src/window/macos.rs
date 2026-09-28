@@ -126,4 +126,102 @@ pub fn disable_app_nap() {
 #[cfg(not(target_os = "macos"))]
 pub fn disable_app_nap() {}
 
+#[cfg(target_os = "macos")]
+pub fn set_macos_process_name(name: &str) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    if let Ok(c_str) = std::ffi::CString::new(name) {
+        unsafe {
+            if let Some(process_info_cls) = AnyClass::get("NSProcessInfo") {
+                let process_info: *mut AnyObject = msg_send![process_info_cls, processInfo];
+                if !process_info.is_null() {
+                    if let Some(nsstring_cls) = AnyClass::get("NSString") {
+                        let ns_name: *mut AnyObject = msg_send![
+                            nsstring_cls,
+                            stringWithUTF8String: c_str.as_ptr()
+                        ];
+                        if !ns_name.is_null() {
+                            let () = msg_send![process_info, setProcessName: ns_name];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_macos_process_name(_name: &str) {}
+
+#[cfg(target_os = "macos")]
+pub fn set_macos_dock_badge(badge: Option<&str>) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        unsafe {
+            let app = NSApplication::sharedApplication(mtm);
+            let dock_tile: *mut AnyObject = msg_send![&*app, dockTile];
+            if !dock_tile.is_null() {
+                if let Some(badge_str) = badge {
+                    if let Ok(c_str) = std::ffi::CString::new(badge_str) {
+                        if let Some(nsstring_cls) = AnyClass::get("NSString") {
+                            let ns_badge: *mut AnyObject = msg_send![
+                                nsstring_cls,
+                                stringWithUTF8String: c_str.as_ptr()
+                            ];
+                            let () = msg_send![dock_tile, setBadgeLabel: ns_badge];
+                        }
+                    }
+                } else {
+                    let null_str: *mut AnyObject = std::ptr::null_mut();
+                    let () = msg_send![dock_tile, setBadgeLabel: null_str];
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_macos_dock_badge(_badge: Option<&str>) {}
+
+#[cfg(target_os = "macos")]
+pub fn set_macos_menu_title(title: &str) {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        unsafe {
+            let app = NSApplication::sharedApplication(mtm);
+            let main_menu: *mut AnyObject = msg_send![&*app, mainMenu];
+            if !main_menu.is_null() {
+                let count: usize = msg_send![main_menu, numberOfItems];
+                if count > 0 {
+                    let first_item: *mut AnyObject = msg_send![main_menu, itemAtIndex: 0isize];
+                    if !first_item.is_null() {
+                        if let Ok(c_str) = std::ffi::CString::new(title) {
+                            if let Some(nsstring_cls) = AnyClass::get("NSString") {
+                                let ns_title: *mut AnyObject = msg_send![
+                                    nsstring_cls,
+                                    stringWithUTF8String: c_str.as_ptr()
+                                ];
+                                let () = msg_send![first_item, setTitle: ns_title];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_macos_menu_title(_title: &str) {}
+
+
 

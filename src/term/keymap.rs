@@ -23,6 +23,7 @@ pub enum KeyAction {
     NewWorkspace,
     PreviousWorkspace,
     NextWorkspace,
+    CycleNextWindow,
     ToggleWorkspaceModal,
     CustomizeTabColor,
     ReloadConfig,
@@ -47,9 +48,14 @@ pub fn translate_key_event(
 ) -> Option<KeyAction> {
     // 0. Command (Logo) or Ctrl+Shift shortcuts for Tab and Workspace management
     if mods.logo && !mods.ctrl && !mods.alt {
+        if physical_key == Some(KeyCode::Backquote) {
+            return Some(KeyAction::CycleNextWindow);
+        }
+
         if mods.shift {
             if let Key::Character(ch) = key {
                 match ch.as_str() {
+                    "~" | "`" => return Some(KeyAction::CycleNextWindow),
                     "N" | "n" => return Some(KeyAction::NewWorkspace),
                     "{" | "[" => return Some(KeyAction::PreviousWorkspace),
                     "}" | "]" => return Some(KeyAction::NextWorkspace),
@@ -63,6 +69,7 @@ pub fn translate_key_event(
         } else {
             if let Key::Character(ch) = key {
                 match ch.as_str() {
+                    "`" | "~" => return Some(KeyAction::CycleNextWindow),
                     "t" | "T" => return Some(KeyAction::NewTab),
                     "w" | "W" => return Some(KeyAction::CloseTab),
                     "q" | "Q" => return Some(KeyAction::Quit),
