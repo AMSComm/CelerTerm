@@ -315,7 +315,7 @@ impl CelerApp {
         app
     }
 
-    /// Synchronizes process name, dock badge, window title, and environment variables
+    /// Synchronizes process name, window title, and environment variables
     /// with the currently active workspace.
     pub fn update_window_and_process_title(&self) {
         if let Some(active_ws) = self.workspace_mgr.get_active_workspace() {
@@ -330,7 +330,7 @@ impl CelerApp {
             #[cfg(target_os = "macos")]
             {
                 crate::window::macos::set_macos_process_name(&format!("CelerTerm ({})", ws_name));
-                crate::window::macos::set_macos_dock_badge(Some(ws_name));
+                crate::window::macos::set_macos_dock_badge(None);
                 crate::window::macos::set_macos_menu_title(&format!("CelerTerm ({})", ws_name));
             }
 
