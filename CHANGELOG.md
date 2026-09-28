@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-09-28
+
+### Changed & Improved
+
+- **Clean macOS App Switcher & Dock Appearance**:
+  - Removed the red `NSDockTile` badge label across workspaces to prevent intrusive and unseemly badge overlays in macOS App Switcher (`Cmd + Tab`) and the macOS Dock.
+  - Active workspace identity continues to be cleanly and natively displayed directly below the application icon via `NSProcessInfo.processName` (`CelerTerm (<Workspace Name>)`), as well as on the application window title.
+
 ## [0.2.10] - 2026-09-28
 
 ### Added
@@ -79,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Pressing Shift+Enter during active IME composition (Vietnamese or Japanese) commits the text and emits `\n` (newline) instead of `\r`, enabling multiline input without premature prompt submission.
 - **Digit Confirmation on IME Commit (Fix for '0' and Numbers)**:
   - Fixed an issue where pressing '0' (or other digits) during unconfirmed Vietnamese preedit swallowed the digit or inserted an unwanted space.
-  - Added ASCII digit and keycode detection for all numbers (row & keypad) so typing e.g. `v` + `0` cleanly produces `v0` and `tieng` + `0` produces `tiếng0`.
+  - Added ASCII digit and keycode detection for all numbers (row & keypad) so typing e.g. `v` + `0` cleanly produces `v0` and `tieng` + `0` produces `tieng0`.
 
 ## [0.2.6] - 2026-09-27
 
