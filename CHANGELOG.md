@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-09-28
+
+### Added
+
+- **Workspace Distinct Theme & Accent Colors**:
+  - Automatically assigns non-colliding accent colors to new and existing workspaces from a curated 20-color Tokyo Night palette (`#7aa2f7`, `#2ac3de`, `#7dcfff`, `#bb9af7`, `#9d7cd8`, `#73daca`, `#b4f9f8`, `#9ece6a`, `#e0af68`, `#ff9e64`, `#f7768e`, `#db4b4b`, `#c0caf5`, `#a9b1d6`, `#9aa5ce`, `#565f89`, `#ff757f`, `#449dab`, `#ff007f`, `#00e5ff`).
+  - Added full color and background customization in the Workspace Management modal (`c` key or `[c] Color` button).
+  - Terminal canvas dynamically fills with the active workspace's custom background color (or Tokyo Night default `#1A1B26`).
+  - Added 2px top accent stripe under the header reflecting the active workspace color, plus a colored bullet dot `●` badge on the workspace indicator.
+- **Tab Visual Highlight & Per-Tab Color Customization**:
+  - **Active Tab Highlight**: 2px top accent stripe at the top edge of the active tab, rendered in the tab's custom color (or inheriting the active workspace's color), plus a colored bullet dot `●` adjacent to the tab title.
+  - **Individual Tab Color Overrides**: Tabs can have custom color overrides to visually categorize tasks (dev, server, database, test, logs).
+  - **Inactive Tab Custom Dot**: Inactive tabs with custom colors retain their colored bullet dot `●` for easy scanning, while default tabs remain clean and minimal.
+  - **Interactive Tab Color Popover**:
+    - Right-click on any tab header to open the color selector popover directly beneath that tab.
+    - Keyboard shortcut `Cmd + Shift + T` or `Cmd + Shift + K` on macOS (`Ctrl + Shift + T` or `Ctrl + Shift + K` on Linux) to open color picker for the active tab.
+    - Features 20 curated Tokyo Night swatches (navigable via arrow keys or mouse clicks), custom 6-character HEX input with live preview box, `[Enter]` to apply, `[r]` to reset back to inheriting workspace color, and `[Esc]` / click outside to close.
+- **Persistence & Backward Compatibility**:
+  - Full disk snapshot persistence for workspace and tab colors across application restarts.
+  - 100% backward compatible deserialization for legacy snapshots without color fields.
+
+### Fixed & Tested
+
+- **Font Shaping & Coverage**:
+  - Verified and confirmed full support for Vietnamese tone marks shaping across all supported font fallbacks including Firple VN.
+
 ## [0.2.8] - 2026-09-27
 
 ### Fixed & Improved
