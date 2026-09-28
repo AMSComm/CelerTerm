@@ -62,19 +62,21 @@ fn test_modal_buttons_fit_within_modal_no_overflow() {
     };
     let buttons = calculate_modal_buttons(modal, 42.0, 1.0, 8.5);
 
-    assert_eq!(buttons.len(), 5);
+    assert_eq!(buttons.len(), 6);
 
     // Verify labels
     assert_eq!(buttons[0].id, "new");
     assert_eq!(buttons[0].label, "[n] New");
     assert_eq!(buttons[1].id, "rename");
     assert_eq!(buttons[1].label, "[r] Rename");
-    assert_eq!(buttons[2].id, "delete");
-    assert_eq!(buttons[2].label, "[d] Delete");
-    assert_eq!(buttons[3].id, "window");
-    assert_eq!(buttons[3].label, "[w] Window");
-    assert_eq!(buttons[4].id, "switch");
-    assert_eq!(buttons[4].label, "[Enter] Switch");
+    assert_eq!(buttons[2].id, "color");
+    assert_eq!(buttons[2].label, "[c] Color");
+    assert_eq!(buttons[3].id, "delete");
+    assert_eq!(buttons[3].label, "[d] Delete");
+    assert_eq!(buttons[4].id, "window");
+    assert_eq!(buttons[4].label, "[w] Window");
+    assert_eq!(buttons[5].id, "switch");
+    assert_eq!(buttons[5].label, "[Enter] Switch");
 
     // Verify all buttons strictly fit within modal boundaries with zero overflow
     for btn in &buttons {
@@ -95,7 +97,7 @@ fn test_modal_buttons_fit_within_modal_no_overflow() {
     }
 
     // Verify buttons are laid out sequentially from left to right without overlap
-    for i in 0..4 {
+    for i in 0..5 {
         assert!(
             buttons[i].rect.x + buttons[i].rect.width <= buttons[i + 1].rect.x,
             "Buttons {} and {} overlap",

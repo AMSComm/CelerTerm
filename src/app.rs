@@ -84,6 +84,12 @@ pub enum WorkspaceModalMode {
     List,
     Renaming { input: String },
     Creating { input: String },
+    Coloring {
+        target_ws_id: String,
+        is_background: bool,
+        selected_swatch_idx: usize,
+        hex_input: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -731,6 +737,107 @@ impl CelerApp {
                     _ => {}
                 }
             }
+            WorkspaceModalMode::Coloring {
+                target_ws_id,
+                is_background,
+                selected_swatch_idx,
+                hex_input,
+            } => {
+                match key {
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab) => {
+                        *is_background = !*is_background;
+                        *selected_swatch_idx = 0;
+                        if let Some(ws) = self.workspace_mgr.workspaces.iter().find(|w| &w.id == target_ws_id) {
+                            if *is_background {
+                                *hex_input = ws.background.as_deref().unwrap_or("1a1b26").trim_start_matches('#').to_string();
+                            } else {
+                                *hex_input = ws.color.as_deref().unwrap_or("7aa2f7").trim_start_matches('#').to_string();
+                            }
+                        }
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                        let ws_id = target_ws_id.clone();
+                        let chosen_hex = if hex_input.len() == 6 && hex_input.chars().all(|c| c.is_ascii_hexdigit()) {
+                            format!("#{}", hex_input.to_lowercase())
+                        } else if let Some(norm) = crate::workspace::normalize_hex(hex_input) {
+                            norm
+                        } else if *is_background {
+                            crate::workspace::WORKSPACE_BACKGROUND_PALETTE[*selected_swatch_idx % crate::workspace::WORKSPACE_BACKGROUND_PALETTE.len()].hex.to_string()
+                        } else {
+                            crate::workspace::WORKSPACE_ACCENT_PALETTE[*selected_swatch_idx % crate::workspace::WORKSPACE_ACCENT_PALETTE.len()].hex.to_string()
+                        };
+
+                        if *is_background {
+                            let _ = self.workspace_mgr.set_workspace_background(&ws_id, Some(chosen_hex));
+                        } else {
+                            let _ = self.workspace_mgr.set_workspace_color(&ws_id, Some(chosen_hex));
+                        }
+                        self.save_workspace_state();
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                        hex_input.pop();
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
+                        *selected_swatch_idx = selected_swatch_idx.saturating_sub(1);
+                        if *is_background {
+                            *hex_input = crate::workspace::WORKSPACE_BACKGROUND_PALETTE[*selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                        } else {
+                            *hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[*selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                        }
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
+                        let max_idx = if *is_background { crate::workspace::WORKSPACE_BACKGROUND_PALETTE.len() } else { crate::workspace::WORKSPACE_ACCENT_PALETTE.len() };
+                        if *selected_swatch_idx + 1 < max_idx {
+                            *selected_swatch_idx += 1;
+                        }
+                        if *is_background {
+                            *hex_input = crate::workspace::WORKSPACE_BACKGROUND_PALETTE[*selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                        } else {
+                            *hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[*selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                        }
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                        if !*is_background && *selected_swatch_idx >= 10 {
+                            *selected_swatch_idx -= 10;
+                            *hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[*selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                        }
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                        if !*is_background && *selected_swatch_idx + 10 < crate::workspace::WORKSPACE_ACCENT_PALETTE.len() {
+                            *selected_swatch_idx += 10;
+                            *hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[*selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                        }
+                    }
+                    winit::keyboard::Key::Character(s) => {
+                        match s.as_str() {
+                            "r" | "R" if hex_input.is_empty() => {
+                                let ws_id = target_ws_id.clone();
+                                if *is_background {
+                                    let _ = self.workspace_mgr.set_workspace_background(&ws_id, None);
+                                } else {
+                                    let _ = self.workspace_mgr.set_workspace_color(&ws_id, None);
+                                }
+                                self.save_workspace_state();
+                                self.workspace_modal.mode = WorkspaceModalMode::List;
+                            }
+                            ch => {
+                                for c in ch.chars() {
+                                    if (c.is_ascii_hexdigit() || c == '#') && hex_input.len() < 6 {
+                                        if c != '#' {
+                                            hex_input.push(c);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             WorkspaceModalMode::List => {
                 match key {
                     winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
@@ -761,6 +868,18 @@ impl CelerApp {
                                 let idx = self.workspace_modal.selected_index;
                                 if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                     self.workspace_modal.mode = WorkspaceModalMode::Renaming { input: ws.name.clone() };
+                                }
+                            }
+                            "c" | "C" => {
+                                let idx = self.workspace_modal.selected_index;
+                                if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                    let initial_hex = ws.color.clone().unwrap_or_else(|| ws.effective_color_hex(idx));
+                                    self.workspace_modal.mode = WorkspaceModalMode::Coloring {
+                                        target_ws_id: ws.id.clone(),
+                                        is_background: false,
+                                        selected_swatch_idx: 0,
+                                        hex_input: initial_hex.trim_start_matches('#').to_string(),
+                                    };
                                 }
                             }
                             "d" | "D" => {
@@ -1446,6 +1565,156 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         if button == MouseButton::Left {
                             let (width, height) = (size.width as f32, size.height as f32);
                             let scale = self.scale_factor;
+
+                            if let WorkspaceModalMode::Coloring {
+                                ref target_ws_id,
+                                is_background,
+                                selected_swatch_idx,
+                                ref hex_input,
+                            } = self.workspace_modal.mode
+                            {
+                                let modal_w = (620.0 * scale).min(width - 32.0);
+                                let header_h = (36.0 * scale).round();
+                                let tab_bar_h = (36.0 * scale).round();
+                                let swatches_h = if is_background { (36.0 * scale).round() } else { (68.0 * scale).round() };
+                                let input_preview_h = (44.0 * scale).round();
+                                let footer_h = (42.0 * scale).round();
+                                let modal_h = header_h + tab_bar_h + swatches_h + input_preview_h + footer_h + (24.0 * scale);
+
+                                let modal_x = ((width - modal_w) * 0.5).max(10.0);
+                                let modal_y = ((height - modal_h) * 0.5).max(10.0);
+
+                                if mx < modal_x || mx > modal_x + modal_w || my < modal_y || my > modal_y + modal_h {
+                                    self.workspace_modal.mode = WorkspaceModalMode::List;
+                                    window.request_redraw();
+                                    return;
+                                }
+
+                                let esc_label = "[Esc] Back";
+                                let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                                let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
+                                if my >= modal_y && my <= modal_y + header_h && mx >= esc_x {
+                                    self.workspace_modal.mode = WorkspaceModalMode::List;
+                                    window.request_redraw();
+                                    return;
+                                }
+
+                                // Tabs (Accent vs Background)
+                                let tabs_y = modal_y + header_h + (8.0 * scale);
+                                let tab_w = ((modal_w - (40.0 * scale)) * 0.5).round();
+                                let tab0_rect = crate::window::Rect { x: modal_x + (16.0 * scale), y: tabs_y, width: tab_w, height: (28.0 * scale).round() };
+                                let tab1_rect = crate::window::Rect { x: modal_x + (24.0 * scale) + tab_w, y: tabs_y, width: tab_w, height: (28.0 * scale).round() };
+                                let ws_id = target_ws_id.clone();
+
+                                if tab0_rect.contains(mx, my) {
+                                    let cur_hex = self.workspace_mgr.workspaces.iter().find(|w| w.id == ws_id)
+                                        .and_then(|w| w.color.clone())
+                                        .unwrap_or_else(|| "7aa2f7".to_string());
+                                    self.workspace_modal.mode = WorkspaceModalMode::Coloring {
+                                        target_ws_id: ws_id,
+                                        is_background: false,
+                                        selected_swatch_idx: 0,
+                                        hex_input: cur_hex.trim_start_matches('#').to_string(),
+                                    };
+                                    window.request_redraw();
+                                    return;
+                                } else if tab1_rect.contains(mx, my) {
+                                    let cur_hex = self.workspace_mgr.workspaces.iter().find(|w| w.id == ws_id)
+                                        .and_then(|w| w.background.clone())
+                                        .unwrap_or_else(|| "1a1b26".to_string());
+                                    self.workspace_modal.mode = WorkspaceModalMode::Coloring {
+                                        target_ws_id: ws_id,
+                                        is_background: true,
+                                        selected_swatch_idx: 0,
+                                        hex_input: cur_hex.trim_start_matches('#').to_string(),
+                                    };
+                                    window.request_redraw();
+                                    return;
+                                }
+
+                                // Swatches
+                                let swatches_y = tabs_y + tab_bar_h + (4.0 * scale);
+                                let pad_x = modal_x + (16.0 * scale);
+                                let avail_w = modal_w - (32.0 * scale);
+                                let (cols, count) = if is_background {
+                                    (10, crate::workspace::WORKSPACE_BACKGROUND_PALETTE.len())
+                                } else {
+                                    (10, crate::workspace::WORKSPACE_ACCENT_PALETTE.len())
+                                };
+                                let gap = 6.0 * scale;
+                                let swatch_w = (avail_w - ((cols - 1) as f32 * gap)) / cols as f32;
+                                let swatch_h = (26.0 * scale).round();
+
+                                for i in 0..count {
+                                    let col = i % cols;
+                                    let row = i / cols;
+                                    let sx = pad_x + col as f32 * (swatch_w + gap);
+                                    let sy = swatches_y + row as f32 * (swatch_h + gap);
+                                    let s_rect = crate::window::Rect { x: sx, y: sy, width: swatch_w, height: swatch_h };
+                                    if s_rect.contains(mx, my) {
+                                        let h = if is_background {
+                                            crate::workspace::WORKSPACE_BACKGROUND_PALETTE[i].hex.trim_start_matches('#').to_string()
+                                        } else {
+                                            crate::workspace::WORKSPACE_ACCENT_PALETTE[i].hex.trim_start_matches('#').to_string()
+                                        };
+                                        self.workspace_modal.mode = WorkspaceModalMode::Coloring {
+                                            target_ws_id: ws_id,
+                                            is_background,
+                                            selected_swatch_idx: i,
+                                            hex_input: h,
+                                        };
+                                        window.request_redraw();
+                                        return;
+                                    }
+                                }
+
+                                // Footer buttons in coloring mode:
+                                let footer_y = modal_y + modal_h - footer_h;
+                                let btn_h = (footer_h - 14.0 * scale).max(20.0);
+                                let btn_y = footer_y + ((footer_h - btn_h) * 0.5);
+                                let btn_w = (110.0 * scale).round();
+                                let apply_btn = crate::window::Rect { x: modal_x + (16.0 * scale), y: btn_y, width: btn_w, height: btn_h };
+                                let reset_btn = crate::window::Rect { x: modal_x + (24.0 * scale) + btn_w, y: btn_y, width: btn_w, height: btn_h };
+                                let back_btn = crate::window::Rect { x: modal_x + (32.0 * scale) + (btn_w * 2.0), y: btn_y, width: btn_w, height: btn_h };
+
+                                if apply_btn.contains(mx, my) {
+                                    let chosen_hex = if hex_input.len() == 6 && hex_input.chars().all(|c| c.is_ascii_hexdigit()) {
+                                        format!("#{}", hex_input.to_lowercase())
+                                    } else if let Some(norm) = crate::workspace::normalize_hex(hex_input) {
+                                        norm
+                                    } else if is_background {
+                                        crate::workspace::WORKSPACE_BACKGROUND_PALETTE[selected_swatch_idx % crate::workspace::WORKSPACE_BACKGROUND_PALETTE.len()].hex.to_string()
+                                    } else {
+                                        crate::workspace::WORKSPACE_ACCENT_PALETTE[selected_swatch_idx % crate::workspace::WORKSPACE_ACCENT_PALETTE.len()].hex.to_string()
+                                    };
+
+                                    if is_background {
+                                        let _ = self.workspace_mgr.set_workspace_background(&ws_id, Some(chosen_hex));
+                                    } else {
+                                        let _ = self.workspace_mgr.set_workspace_color(&ws_id, Some(chosen_hex));
+                                    }
+                                    self.save_workspace_state();
+                                    self.workspace_modal.mode = WorkspaceModalMode::List;
+                                    window.request_redraw();
+                                    return;
+                                } else if reset_btn.contains(mx, my) {
+                                    if is_background {
+                                        let _ = self.workspace_mgr.set_workspace_background(&ws_id, None);
+                                    } else {
+                                        let _ = self.workspace_mgr.set_workspace_color(&ws_id, None);
+                                    }
+                                    self.save_workspace_state();
+                                    self.workspace_modal.mode = WorkspaceModalMode::List;
+                                    window.request_redraw();
+                                    return;
+                                } else if back_btn.contains(mx, my) {
+                                    self.workspace_modal.mode = WorkspaceModalMode::List;
+                                    window.request_redraw();
+                                    return;
+                                }
+                                return;
+                            }
+
                             let modal_w = (580.0 * scale).min(width - 32.0);
                             let header_h = (36.0 * scale).round();
                             let row_h = (32.0 * scale).round();
@@ -1483,6 +1752,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if my >= list_top && my < list_top + list_h {
                                 let clicked_idx = ((my - list_top) / row_h).floor() as usize;
                                 if clicked_idx < ws_count {
+                                    let dot_x = modal_x + (34.0 * scale);
+                                    let dot_w = 20.0 * scale;
+                                    if mx >= dot_x && mx <= dot_x + dot_w {
+                                        // Click directly on color dot opens color picker for this workspace!
+                                        self.workspace_modal.selected_index = clicked_idx;
+                                        let ws = &self.workspace_mgr.workspaces[clicked_idx];
+                                        let initial_hex = ws.color.clone().unwrap_or_else(|| ws.effective_color_hex(clicked_idx));
+                                        self.workspace_modal.mode = WorkspaceModalMode::Coloring {
+                                            target_ws_id: ws.id.clone(),
+                                            is_background: false,
+                                            selected_swatch_idx: 0,
+                                            hex_input: initial_hex.trim_start_matches('#').to_string(),
+                                        };
+                                        window.request_redraw();
+                                        return;
+                                    }
+
                                     if self.workspace_modal.selected_index == clicked_idx {
                                         // Clicking selected row switches to it
                                         let target_id = self.workspace_mgr.workspaces[clicked_idx].id.clone();
@@ -1522,6 +1808,20 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                             let idx = self.workspace_modal.selected_index;
                                             if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
                                                 self.workspace_modal.mode = WorkspaceModalMode::Renaming { input: ws.name.clone() };
+                                            }
+                                            window.request_redraw();
+                                            return;
+                                        }
+                                        "color" => {
+                                            let idx = self.workspace_modal.selected_index;
+                                            if let Some(ws) = self.workspace_mgr.workspaces.get(idx) {
+                                                let initial_hex = ws.color.clone().unwrap_or_else(|| ws.effective_color_hex(idx));
+                                                self.workspace_modal.mode = WorkspaceModalMode::Coloring {
+                                                    target_ws_id: ws.id.clone(),
+                                                    is_background: false,
+                                                    selected_swatch_idx: 0,
+                                                    hex_input: initial_hex.trim_start_matches('#').to_string(),
+                                                };
                                             }
                                             window.request_redraw();
                                             return;
@@ -1686,7 +1986,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                         // Check click on Workspace name badge
                         let ws_name = self.workspace_mgr.get_active_workspace().map(|w| w.name.as_str()).unwrap_or("Default");
-                        let ws_w = ws_name.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
+                        let ws_label = format!("● {}", ws_name);
+                        let ws_w = ws_label.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
                         let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
                         let ws_x = header.menu_button_rect.x - ws_w - (8.0 * self.scale_factor);
                         let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
@@ -2198,9 +2499,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     #[cfg(target_os = "macos")]
                     apply_traffic_lights_visibility(window, self.config.window.hide_traffic_lights);
 
-                    // 1. Fill terminal background (Tokyo Night navy #1a1b26)
-                    let bg_color = 0x001A1B26;
-                    buffer.fill(bg_color);
+                    // 1. Fill terminal background with workspace background (or Tokyo Night default #1a1b26)
+                    let active_ws = self.workspace_mgr.get_active_workspace();
+                    let default_config_bg = parse_hex_color(&self.config.colors.background, 0x001A1B26);
+                    let effective_bg = active_ws.map(|w| w.effective_background_u32(default_config_bg)).unwrap_or(default_config_bg);
+                    let active_accent = active_ws
+                        .map(|w| {
+                            let idx = self.workspace_mgr.workspaces.iter().position(|ws| ws.id == w.id).unwrap_or(0);
+                            w.effective_color_u32(idx)
+                        })
+                        .unwrap_or(0x007AA2F7);
+
+                    buffer.fill(effective_bg);
 
                     // 2. Render Tab Header
                     let raw_tabs = self.workspace_mgr.get_active_workspace()
@@ -2240,6 +2550,20 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             0x0016161E,
                         );
 
+                        // Accent stripe 2px under header with active workspace color
+                        let stripe_h = (2.0 * self.scale_factor).round().max(1.0) as usize;
+                        let stripe_y = (header.height - stripe_h as f32).max(0.0) as usize;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            0,
+                            stripe_y,
+                            width,
+                            stripe_h,
+                            active_accent,
+                        );
+
                         // Draw ☰ Menu Button on the far right
                         let menu_rect = header.menu_button_rect;
                         if menu_rect.width > 0.0 {
@@ -2271,7 +2595,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
 
                         // Draw Workspace Indicator badge to the left of the menu button
-                        let ws_label = active_ws_name.to_string();
+                        let ws_label = format!("● {}", active_ws_name);
                         let ws_w = ws_label.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
                         let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
                         let ws_x = menu_rect.x - ws_w - (8.0 * self.scale_factor);
@@ -2289,6 +2613,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 ws_h as usize,
                                 if is_hovered { 0x00283457 } else { 0x001F2335 },
                             );
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (ws_x as usize, ws_y as usize, ws_w as usize, ws_h as usize),
+                                1,
+                                active_accent,
+                            );
                             let text_x = ws_x + (8.0 * self.scale_factor);
                             let text_y = ws_y + ((ws_h - self.renderer.cell_height) * 0.5).max(0.0);
                             self.renderer.draw_text(
@@ -2298,7 +2629,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 text_x,
                                 text_y,
                                 &ws_label,
-                                0x007AA2F7,
+                                active_accent,
                             );
                         }
 
@@ -2397,7 +2728,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let cols = active_session.screen.size.columns;
                         let lines = active_session.screen.size.lines;
                         let default_fg = 0x00C0CAF5;
-                        let default_bg = 0x001A1B26;
+                        let default_bg = effective_bg;
                         let selection_range = active_session.screen.selection_range();
                         let selection_bg_u32 = parse_hex_color(&self.config.colors.selection_background, 0x0033467c);
                         let display_offset = active_session.screen.display_offset();
@@ -2647,244 +2978,468 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                     // Render Workspace Management Modal if open
                     if self.workspace_modal.is_open {
-
                         let scale = self.scale_factor;
-                        let modal_w = (580.0 * scale).min(width as f32 - 32.0);
-                        let header_h = (36.0 * scale).round();
-                        let row_h = (32.0 * scale).round();
-                        let ws_count = self.workspace_mgr.workspaces.len();
-                        let list_h = (ws_count as f32 * row_h).max(32.0 * scale);
-                        let is_editing = matches!(self.workspace_modal.mode, WorkspaceModalMode::Renaming { .. } | WorkspaceModalMode::Creating { .. });
-                        let edit_h = if is_editing { (36.0 * scale).round() } else { 0.0 };
-                        let footer_h = (42.0 * scale).round();
-                        let modal_h = header_h + list_h + edit_h + footer_h + (16.0 * scale);
 
-                        let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
-                        let modal_y = ((height as f32 - modal_h) * 0.5).max(10.0);
+                        if let WorkspaceModalMode::Coloring {
+                            target_ws_id,
+                            is_background,
+                            selected_swatch_idx,
+                            hex_input,
+                        } = &self.workspace_modal.mode
+                        {
+                            let is_bg = *is_background;
+                            let sel_idx = *selected_swatch_idx;
+                            let modal_w = (620.0 * scale).min(width as f32 - 32.0);
+                            let header_h = (36.0 * scale).round();
+                            let tab_bar_h = (36.0 * scale).round();
+                            let swatches_h = if is_bg { (36.0 * scale).round() } else { (68.0 * scale).round() };
+                            let input_preview_h = (44.0 * scale).round();
+                            let footer_h = (42.0 * scale).round();
+                            let modal_h = header_h + tab_bar_h + swatches_h + input_preview_h + footer_h + (24.0 * scale);
 
-                        // Modal background (#1A1B26)
-                        TextRenderer::draw_rect(
-                            &mut buffer,
-                            width,
-                            height,
-                            modal_x as usize,
-                            modal_y as usize,
-                            modal_w as usize,
-                            modal_h as usize,
-                            0x001A1B26,
-                        );
+                            let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
+                            let modal_y = ((height as f32 - modal_h) * 0.5).max(10.0);
 
-                        // Modal border (#3B4261, 1px)
-                        draw_outline_rect(
-                            &mut buffer,
-                            (width, height),
-                            (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
-                            1,
-                            0x003B4261,
-                        );
-
-                        // Header strip (#24283B)
-                        TextRenderer::draw_rect(
-                            &mut buffer,
-                            width,
-                            height,
-                            modal_x as usize,
-                            modal_y as usize,
-                            modal_w as usize,
-                            header_h as usize,
-                            0x0024283B,
-                        );
-                        let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
-                        self.renderer.draw_text(
-                            &mut buffer,
-                            width,
-                            height,
-                            modal_x + (16.0 * scale),
-                            head_text_y,
-                            "Workspaces",
-                            0x00C0CAF5,
-                        );
-                        let esc_label = "[Esc] Close";
-                        let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
-                        let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
-                        self.renderer.draw_text(
-                            &mut buffer,
-                            width,
-                            height,
-                            esc_x,
-                            head_text_y,
-                            esc_label,
-                            0x00787C99,
-                        );
-
-                        // Workspace list rows
-                        let list_top = modal_y + header_h + (8.0 * scale);
-                        let my_pid = std::process::id();
-                        let other_instances = crate::workspace::get_all_active_instances();
-                        for (idx, ws) in self.workspace_mgr.workspaces.iter().enumerate() {
-                            let row_y = list_top + (idx as f32 * row_h);
-                            let is_selected = idx == self.workspace_modal.selected_index;
-                            let is_current = ws.id == self.workspace_mgr.active_workspace_id;
-                            let row_bg = if is_selected { 0x00283457 } else { 0x001A1B26 };
-
+                            // Background (#1A1B26)
                             TextRenderer::draw_rect(
                                 &mut buffer,
                                 width,
                                 height,
-                                (modal_x + (8.0 * scale)) as usize,
-                                row_y as usize,
-                                (modal_w - (16.0 * scale)) as usize,
-                                row_h as usize,
-                                row_bg,
+                                modal_x as usize,
+                                modal_y as usize,
+                                modal_w as usize,
+                                modal_h as usize,
+                                0x001A1B26,
                             );
 
-                            let text_y = row_y + ((row_h - self.renderer.cell_height) * 0.5).max(0.0);
-                            let num_str = format!("{}. ", idx + 1);
-                            self.renderer.draw_text(&mut buffer, width, height, modal_x + (16.0 * scale), text_y, &num_str, 0x00565F89);
+                            // Border (#3B4261, 1px)
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
+                                1,
+                                0x003B4261,
+                            );
 
-                            let name_x = modal_x + (40.0 * scale);
-                            let name_fg = if is_selected { 0x007AA2F7 } else { 0x00C0CAF5 };
-                            self.renderer.draw_text(&mut buffer, width, height, name_x, text_y, &ws.name, name_fg);
-
-                            let tab_info = format!("({} tab{})", ws.tabs.len(), if ws.tabs.len() > 1 { "s" } else { "" });
-                            let info_x = name_x + (ws.name.len() as f32 * self.renderer.cell_width) + (10.0 * scale);
-                            self.renderer.draw_text(&mut buffer, width, height, info_x, text_y, &tab_info, 0x00565F89);
-
-                            if is_current {
-                                let cur_x = modal_x + modal_w - (80.0 * scale);
-                                self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● Active", 0x009ECE6A);
-                            } else if other_instances.iter().any(|inst| inst.pid != my_pid && (inst.workspace_id == ws.id || inst.workspace_name == ws.name)) {
-                                let cur_x = modal_x + modal_w - (105.0 * scale);
-                                self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● In Window", 0x007DCFFF);
-                            }
-                        }
-
-                        // Inline text editing (Renaming / Creating)
-                        if is_editing {
-                            let edit_y = list_top + list_h + (4.0 * scale);
-                            let (prompt, input_str) = match &self.workspace_modal.mode {
-                                WorkspaceModalMode::Renaming { input } => ("Rename to: ", input.as_str()),
-                                WorkspaceModalMode::Creating { input } => ("New workspace: ", input.as_str()),
-                                WorkspaceModalMode::List => ("", ""),
-                            };
-
+                            // Header strip (#24283B)
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                modal_x as usize,
+                                modal_y as usize,
+                                modal_w as usize,
+                                header_h as usize,
+                                0x0024283B,
+                            );
+                            let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
+                            let target_ws = self.workspace_mgr.workspaces.iter().find(|w| &w.id == target_ws_id);
+                            let ws_title = target_ws.map(|w| w.name.as_str()).unwrap_or("Workspace");
+                            let head_title = format!("Theme & Color: {}", ws_title);
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
                                 modal_x + (16.0 * scale),
-                                edit_y,
-                                prompt,
-                                0x00BB9AF7,
+                                head_text_y,
+                                &head_title,
+                                0x00C0CAF5,
                             );
-
-                            let prompt_w = prompt.len() as f32 * self.renderer.cell_width;
-                            let input_x = modal_x + (16.0 * scale) + prompt_w;
-                            let input_w = ((input_str.len() + 3) as f32 * self.renderer.cell_width).max(120.0 * scale);
-                            let input_h = (self.renderer.cell_height + 4.0 * scale).round();
-
-                            TextRenderer::draw_rect(
-                                &mut buffer,
-                                width,
-                                height,
-                                input_x as usize,
-                                edit_y as usize,
-                                input_w as usize,
-                                input_h as usize,
-                                0x0016161E,
-                            );
-                            draw_outline_rect(
-                                &mut buffer,
-                                (width, height),
-                                (input_x as usize, edit_y as usize, input_w as usize, input_h as usize),
-                                1,
-                                0x007AA2F7,
-                            );
-
-                            let input_text = format!("{}_", input_str);
+                            let esc_label = "[Esc] Back";
+                            let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                            let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
-                                input_x + (4.0 * scale),
-                                edit_y + (2.0 * scale),
-                                &input_text,
-                                0x007AA2F7,
+                                esc_x,
+                                head_text_y,
+                                esc_label,
+                                0x00787C99,
                             );
-                        }
 
-                        // Footer toolbar
-                        let footer_y = modal_y + modal_h - footer_h;
-                        TextRenderer::draw_rect(
-                            &mut buffer,
-                            width,
-                            height,
-                            modal_x as usize,
-                            footer_y as usize,
-                            modal_w as usize,
-                            footer_h as usize,
-                            0x001F2335,
-                        );
-                        // Subtle top border for footer
-                        TextRenderer::draw_rect(
-                            &mut buffer,
-                            width,
-                            height,
-                            modal_x as usize,
-                            footer_y as usize,
-                            modal_w as usize,
-                            1,
-                            0x00292E42,
-                        );
+                            // Tabs (Accent vs Background)
+                            let tabs_y = modal_y + header_h + (8.0 * scale);
+                            let tab_w = ((modal_w - (40.0 * scale)) * 0.5).round();
+                            let tab_h = (28.0 * scale).round();
 
-                        let modal_rect = crate::window::Rect {
-                            x: modal_x,
-                            y: modal_y,
-                            width: modal_w,
-                            height: modal_h,
-                        };
-                        let footer_buttons = crate::window::calculate_modal_buttons(
-                            modal_rect,
-                            footer_h,
-                            scale,
-                            self.renderer.cell_width,
-                        );
+                            let cur_accent_u32 = target_ws
+                                .map(|w| w.effective_color_u32(self.workspace_modal.selected_index))
+                                .unwrap_or(0x007AA2F7);
+                            let cur_bg_u32 = target_ws
+                                .map(|w| w.effective_background_u32(0x001A1B26))
+                                .unwrap_or(0x001A1B26);
 
-                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
-                        for btn in &footer_buttons {
-                            let is_hovered = btn.rect.contains(mx, my);
-                            let bg_color = if is_hovered { 0x00283457 } else { 0x0024283B };
-                            let border_color = if is_hovered { btn.color } else { 0x003B4261 };
+                            // Tab 0: Accent Color
+                            let tab0_bg = if !is_bg { 0x00283457 } else { 0x001F2335 };
+                            let tab0_border = if !is_bg { 0x007AA2F7 } else { 0x003B4261 };
+                            TextRenderer::draw_rect(&mut buffer, width, height, (modal_x + (16.0 * scale)) as usize, tabs_y as usize, tab_w as usize, tab_h as usize, tab0_bg);
+                            draw_outline_rect(&mut buffer, (width, height), ((modal_x + (16.0 * scale)) as usize, tabs_y as usize, tab_w as usize, tab_h as usize), 1, tab0_border);
+                            let tab0_text_y = tabs_y + ((tab_h - self.renderer.cell_height) * 0.5).max(0.0);
+                            self.renderer.draw_text(&mut buffer, width, height, modal_x + (24.0 * scale), tab0_text_y, "● [1] Accent Color (20 Tokyo Themes)", if !is_bg { 0x007AA2F7 } else { 0x00787C99 });
 
+                            // Tab 1: Background Color
+                            let tab1_x = modal_x + (24.0 * scale) + tab_w;
+                            let tab1_bg = if is_bg { 0x00283457 } else { 0x001F2335 };
+                            let tab1_border = if is_bg { 0x007AA2F7 } else { 0x003B4261 };
+                            TextRenderer::draw_rect(&mut buffer, width, height, tab1_x as usize, tabs_y as usize, tab_w as usize, tab_h as usize, tab1_bg);
+                            draw_outline_rect(&mut buffer, (width, height), (tab1_x as usize, tabs_y as usize, tab_w as usize, tab_h as usize), 1, tab1_border);
+                            self.renderer.draw_text(&mut buffer, width, height, tab1_x + (8.0 * scale), tab0_text_y, "■ [2] Terminal Background (10 Dark)", if is_bg { 0x007AA2F7 } else { 0x00787C99 });
+
+                            // Swatches
+                            let swatches_y = tabs_y + tab_bar_h + (4.0 * scale);
+                            let pad_x = modal_x + (16.0 * scale);
+                            let avail_w = modal_w - (32.0 * scale);
+                            let (cols, count) = if is_bg {
+                                (10, crate::workspace::WORKSPACE_BACKGROUND_PALETTE.len())
+                            } else {
+                                (10, crate::workspace::WORKSPACE_ACCENT_PALETTE.len())
+                            };
+                            let gap = 6.0 * scale;
+                            let swatch_w = (avail_w - ((cols - 1) as f32 * gap)) / cols as f32;
+                            let swatch_h = (26.0 * scale).round();
+
+                            for i in 0..count {
+                                let col = i % cols;
+                                let row = i / cols;
+                                let sx = pad_x + col as f32 * (swatch_w + gap);
+                                let sy = swatches_y + row as f32 * (swatch_h + gap);
+                                let c_val = if is_bg {
+                                    crate::workspace::WORKSPACE_BACKGROUND_PALETTE[i].u32_val
+                                } else {
+                                    crate::workspace::WORKSPACE_ACCENT_PALETTE[i].u32_val
+                                };
+
+                                TextRenderer::draw_rect(&mut buffer, width, height, sx as usize, sy as usize, swatch_w as usize, swatch_h as usize, c_val);
+                                let is_active_swatch = i == sel_idx;
+                                if is_active_swatch {
+                                    draw_outline_rect(&mut buffer, (width, height), (sx as usize, sy as usize, swatch_w as usize, swatch_h as usize), 2, 0x00FFFFFF);
+                                } else {
+                                    draw_outline_rect(&mut buffer, (width, height), (sx as usize, sy as usize, swatch_w as usize, swatch_h as usize), 1, 0x003B4261);
+                                }
+                            }
+
+                            // Custom HEX Input & Live Preview
+                            let input_y = swatches_y + swatches_h + (8.0 * scale);
+                            let hex_prompt = "Custom HEX: #";
+                            let hex_p_w = hex_prompt.len() as f32 * self.renderer.cell_width;
+                            let hex_text_y = input_y + ((28.0 * scale - self.renderer.cell_height) * 0.5).max(0.0);
+                            self.renderer.draw_text(&mut buffer, width, height, modal_x + (16.0 * scale), hex_text_y, hex_prompt, 0x00BB9AF7);
+
+                            let input_box_x = modal_x + (16.0 * scale) + hex_p_w;
+                            let input_box_w = (110.0 * scale).round();
+                            let input_box_h = (28.0 * scale).round();
+                            TextRenderer::draw_rect(&mut buffer, width, height, input_box_x as usize, input_y as usize, input_box_w as usize, input_box_h as usize, 0x0016161E);
+                            draw_outline_rect(&mut buffer, (width, height), (input_box_x as usize, input_y as usize, input_box_w as usize, input_box_h as usize), 1, 0x007AA2F7);
+
+                            let display_hex = format!("{}_", hex_input);
+                            self.renderer.draw_text(&mut buffer, width, height, input_box_x + (6.0 * scale), hex_text_y, &display_hex, 0x00C0CAF5);
+
+                            // Live parsed swatch
+                            let parsed_color = if hex_input.len() == 6 && hex_input.chars().all(|c| c.is_ascii_hexdigit()) {
+                                crate::renderer::color::parse_hex_color(hex_input, if is_bg { 0x001A1B26 } else { 0x007AA2F7 })
+                            } else if is_bg {
+                                crate::workspace::WORKSPACE_BACKGROUND_PALETTE[sel_idx % crate::workspace::WORKSPACE_BACKGROUND_PALETTE.len()].u32_val
+                            } else {
+                                crate::workspace::WORKSPACE_ACCENT_PALETTE[sel_idx % crate::workspace::WORKSPACE_ACCENT_PALETTE.len()].u32_val
+                            };
+                            let swatch_prev_x = input_box_x + input_box_w + (8.0 * scale);
+                            let swatch_prev_w = (28.0 * scale).round();
+                            TextRenderer::draw_rect(&mut buffer, width, height, swatch_prev_x as usize, input_y as usize, swatch_prev_w as usize, input_box_h as usize, parsed_color);
+                            draw_outline_rect(&mut buffer, (width, height), (swatch_prev_x as usize, input_y as usize, swatch_prev_w as usize, input_box_h as usize), 1, 0x00FFFFFF);
+
+                            // Live Preview Badge
+                            let prev_label = "Preview:";
+                            let prev_label_w = prev_label.len() as f32 * self.renderer.cell_width;
+                            let prev_x = swatch_prev_x + swatch_prev_w + (18.0 * scale);
+                            self.renderer.draw_text(&mut buffer, width, height, prev_x, hex_text_y, prev_label, 0x00565F89);
+
+                            let preview_bg = if is_bg { parsed_color } else { cur_bg_u32 };
+                            let preview_accent = if !is_bg { parsed_color } else { cur_accent_u32 };
+
+                            let badge_text = format!("● {}", ws_title);
+                            let badge_w = badge_text.len() as f32 * self.renderer.cell_width + (16.0 * scale);
+                            let badge_x = prev_x + prev_label_w + (8.0 * scale);
+                            if badge_x + badge_w < modal_x + modal_w - (16.0 * scale) {
+                                TextRenderer::draw_rect(&mut buffer, width, height, badge_x as usize, input_y as usize, badge_w as usize, input_box_h as usize, preview_bg);
+                                draw_outline_rect(&mut buffer, (width, height), (badge_x as usize, input_y as usize, badge_w as usize, input_box_h as usize), 1, preview_accent);
+                                self.renderer.draw_text(&mut buffer, width, height, badge_x + (8.0 * scale), hex_text_y, &badge_text, preview_accent);
+                            }
+
+                            // Footer toolbar in coloring mode
+                            let footer_y = modal_y + modal_h - footer_h;
+                            TextRenderer::draw_rect(&mut buffer, width, height, modal_x as usize, footer_y as usize, modal_w as usize, footer_h as usize, 0x001F2335);
+                            TextRenderer::draw_rect(&mut buffer, width, height, modal_x as usize, footer_y as usize, modal_w as usize, 1, 0x00292E42);
+
+                            let btn_h = (footer_h - 14.0 * scale).max(20.0);
+                            let btn_y = footer_y + ((footer_h - btn_h) * 0.5);
+                            let btn_w = (110.0 * scale).round();
+                            let items = [
+                                ("[Enter] Apply", 0x009ECE6A),
+                                ("[r] Reset Default", 0x00F7768E),
+                                ("[Tab] Switch Tab", 0x00BB9AF7),
+                                ("[Esc] Back", 0x007AA2F7),
+                            ];
+                            let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                            for (i, (label, col)) in items.iter().enumerate() {
+                                let bx = modal_x + (16.0 * scale) + (i as f32 * (btn_w + (8.0 * scale)));
+                                if bx + btn_w <= modal_x + modal_w - (8.0 * scale) {
+                                    let b_rect = crate::window::Rect { x: bx, y: btn_y, width: btn_w, height: btn_h };
+                                    let is_h = b_rect.contains(mx, my);
+                                    TextRenderer::draw_rect(&mut buffer, width, height, bx as usize, btn_y as usize, btn_w as usize, btn_h as usize, if is_h { 0x00283457 } else { 0x0024283B });
+                                    draw_outline_rect(&mut buffer, (width, height), (bx as usize, btn_y as usize, btn_w as usize, btn_h as usize), 1, if is_h { *col } else { 0x003B4261 });
+                                    let tw = label.chars().count() as f32 * self.renderer.cell_width;
+                                    let tx = bx + ((btn_w - tw) * 0.5).max(0.0);
+                                    let ty = btn_y + ((btn_h - self.renderer.cell_height) * 0.5).max(0.0);
+                                    self.renderer.draw_text(&mut buffer, width, height, tx, ty, label, *col);
+                                }
+                            }
+                        } else {
+                            let modal_w = (580.0 * scale).min(width as f32 - 32.0);
+                            let header_h = (36.0 * scale).round();
+                            let row_h = (32.0 * scale).round();
+                            let ws_count = self.workspace_mgr.workspaces.len();
+                            let list_h = (ws_count as f32 * row_h).max(32.0 * scale);
+                            let is_editing = matches!(self.workspace_modal.mode, WorkspaceModalMode::Renaming { .. } | WorkspaceModalMode::Creating { .. });
+                            let edit_h = if is_editing { (36.0 * scale).round() } else { 0.0 };
+                            let footer_h = (42.0 * scale).round();
+                            let modal_h = header_h + list_h + edit_h + footer_h + (16.0 * scale);
+
+                            let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
+                            let modal_y = ((height as f32 - modal_h) * 0.5).max(10.0);
+
+                            // Modal background (#1A1B26)
                             TextRenderer::draw_rect(
                                 &mut buffer,
                                 width,
                                 height,
-                                btn.rect.x as usize,
-                                btn.rect.y as usize,
-                                btn.rect.width as usize,
-                                btn.rect.height as usize,
-                                bg_color,
+                                modal_x as usize,
+                                modal_y as usize,
+                                modal_w as usize,
+                                modal_h as usize,
+                                0x001A1B26,
                             );
+
+                            // Modal border (#3B4261, 1px)
                             draw_outline_rect(
                                 &mut buffer,
                                 (width, height),
-                                (btn.rect.x as usize, btn.rect.y as usize, btn.rect.width as usize, btn.rect.height as usize),
+                                (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
                                 1,
-                                border_color,
+                                0x003B4261,
                             );
-                            let text_w = btn.label.chars().count() as f32 * self.renderer.cell_width;
-                            let text_x = btn.rect.x + ((btn.rect.width - text_w) * 0.5).max(0.0);
-                            let text_y = btn.rect.y + ((btn.rect.height - self.renderer.cell_height) * 0.5).max(0.0);
+
+                            // Header strip (#24283B)
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                modal_x as usize,
+                                modal_y as usize,
+                                modal_w as usize,
+                                header_h as usize,
+                                0x0024283B,
+                            );
+                            let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
-                                text_x,
-                                text_y,
-                                btn.label,
-                                btn.color,
+                                modal_x + (16.0 * scale),
+                                head_text_y,
+                                "Workspaces",
+                                0x00C0CAF5,
                             );
+                            let esc_label = "[Esc] Close";
+                            let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                            let esc_x = modal_x + modal_w - esc_w - (20.0 * scale);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                esc_x,
+                                head_text_y,
+                                esc_label,
+                                0x00787C99,
+                            );
+
+                            // Workspace list rows
+                            let list_top = modal_y + header_h + (8.0 * scale);
+                            let my_pid = std::process::id();
+                            let other_instances = crate::workspace::get_all_active_instances();
+                            for (idx, ws) in self.workspace_mgr.workspaces.iter().enumerate() {
+                                let row_y = list_top + (idx as f32 * row_h);
+                                let is_selected = idx == self.workspace_modal.selected_index;
+                                let is_current = ws.id == self.workspace_mgr.active_workspace_id;
+                                let row_bg = if is_selected { 0x00283457 } else { 0x001A1B26 };
+
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    (modal_x + (8.0 * scale)) as usize,
+                                    row_y as usize,
+                                    (modal_w - (16.0 * scale)) as usize,
+                                    row_h as usize,
+                                    row_bg,
+                                );
+
+                                let text_y = row_y + ((row_h - self.renderer.cell_height) * 0.5).max(0.0);
+                                let num_str = format!("{}. ", idx + 1);
+                                self.renderer.draw_text(&mut buffer, width, height, modal_x + (16.0 * scale), text_y, &num_str, 0x00565F89);
+
+                                // Draw workspace color bullet dot ●
+                                let ws_color = ws.effective_color_u32(idx);
+                                let dot_x = modal_x + (34.0 * scale);
+                                self.renderer.draw_text(&mut buffer, width, height, dot_x, text_y, "●", ws_color);
+
+                                let name_x = modal_x + (48.0 * scale);
+                                let name_fg = if is_selected { 0x007AA2F7 } else { 0x00C0CAF5 };
+                                self.renderer.draw_text(&mut buffer, width, height, name_x, text_y, &ws.name, name_fg);
+
+                                let mut tab_info = format!("({} tab{})", ws.tabs.len(), if ws.tabs.len() > 1 { "s" } else { "" });
+                                if let Some(ref bg) = ws.background {
+                                    tab_info.push_str(&format!(" [bg: {}]", bg));
+                                }
+                                let info_x = name_x + (ws.name.len() as f32 * self.renderer.cell_width) + (10.0 * scale);
+                                self.renderer.draw_text(&mut buffer, width, height, info_x, text_y, &tab_info, 0x00565F89);
+
+                                if is_current {
+                                    let cur_x = modal_x + modal_w - (80.0 * scale);
+                                    self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● Active", 0x009ECE6A);
+                                } else if other_instances.iter().any(|inst| inst.pid != my_pid && (inst.workspace_id == ws.id || inst.workspace_name == ws.name)) {
+                                    let cur_x = modal_x + modal_w - (105.0 * scale);
+                                    self.renderer.draw_text(&mut buffer, width, height, cur_x, text_y, "● In Window", 0x007DCFFF);
+                                }
+                            }
+
+                            // Inline text editing (Renaming / Creating)
+                            if is_editing {
+                                let edit_y = list_top + list_h + (4.0 * scale);
+                                let (prompt, input_str) = match &self.workspace_modal.mode {
+                                    WorkspaceModalMode::Renaming { input } => ("Rename to: ", input.as_str()),
+                                    WorkspaceModalMode::Creating { input } => ("New workspace: ", input.as_str()),
+                                    _ => ("", ""),
+                                };
+
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    modal_x + (16.0 * scale),
+                                    edit_y,
+                                    prompt,
+                                    0x00BB9AF7,
+                                );
+
+                                let prompt_w = prompt.len() as f32 * self.renderer.cell_width;
+                                let input_x = modal_x + (16.0 * scale) + prompt_w;
+                                let input_w = ((input_str.len() + 3) as f32 * self.renderer.cell_width).max(120.0 * scale);
+                                let input_h = (self.renderer.cell_height + 4.0 * scale).round();
+
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    input_x as usize,
+                                    edit_y as usize,
+                                    input_w as usize,
+                                    input_h as usize,
+                                    0x0016161E,
+                                );
+                                draw_outline_rect(
+                                    &mut buffer,
+                                    (width, height),
+                                    (input_x as usize, edit_y as usize, input_w as usize, input_h as usize),
+                                    1,
+                                    0x007AA2F7,
+                                );
+
+                                let input_text = format!("{}_", input_str);
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    input_x + (4.0 * scale),
+                                    edit_y + (2.0 * scale),
+                                    &input_text,
+                                    0x007AA2F7,
+                                );
+                            }
+
+                            // Footer toolbar
+                            let footer_y = modal_y + modal_h - footer_h;
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                modal_x as usize,
+                                footer_y as usize,
+                                modal_w as usize,
+                                footer_h as usize,
+                                0x001F2335,
+                            );
+                            // Subtle top border for footer
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                modal_x as usize,
+                                footer_y as usize,
+                                modal_w as usize,
+                                1,
+                                0x00292E42,
+                            );
+
+                            let modal_rect = crate::window::Rect {
+                                x: modal_x,
+                                y: modal_y,
+                                width: modal_w,
+                                height: modal_h,
+                            };
+                            let footer_buttons = crate::window::calculate_modal_buttons(
+                                modal_rect,
+                                footer_h,
+                                scale,
+                                self.renderer.cell_width,
+                            );
+
+                            let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                            for btn in &footer_buttons {
+                                let is_hovered = btn.rect.contains(mx, my);
+                                let bg_color = if is_hovered { 0x00283457 } else { 0x0024283B };
+                                let border_color = if is_hovered { btn.color } else { 0x003B4261 };
+
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    btn.rect.x as usize,
+                                    btn.rect.y as usize,
+                                    btn.rect.width as usize,
+                                    btn.rect.height as usize,
+                                    bg_color,
+                                );
+                                draw_outline_rect(
+                                    &mut buffer,
+                                    (width, height),
+                                    (btn.rect.x as usize, btn.rect.y as usize, btn.rect.width as usize, btn.rect.height as usize),
+                                    1,
+                                    border_color,
+                                );
+                                let text_w = btn.label.chars().count() as f32 * self.renderer.cell_width;
+                                let text_x = btn.rect.x + ((btn.rect.width - text_w) * 0.5).max(0.0);
+                                let text_y = btn.rect.y + ((btn.rect.height - self.renderer.cell_height) * 0.5).max(0.0);
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    text_x,
+                                    text_y,
+                                    btn.label,
+                                    btn.color,
+                                );
+                            }
                         }
                     }
 

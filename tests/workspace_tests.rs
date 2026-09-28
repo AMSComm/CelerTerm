@@ -693,6 +693,94 @@ fn test_multi_window_workspace_deletion_sync() {
     assert!(!win2_saved.workspaces.iter().any(|w| w.id == ws_test_id));
 }
 
+#[test]
+fn test_workspace_distinct_color_assignment() {
+    let mut manager = WorkspaceManager::new();
+
+    // Default workspace has first palette color
+    let default_ws = manager.get_active_workspace().unwrap();
+    assert!(default_ws.color.is_some());
+    assert_eq!(default_ws.color.as_deref(), Some("#7aa2f7"));
+
+    // Create 19 more workspaces - each must have a distinct color from the 20 Tokyo Night palette
+    let mut created_ids = Vec::new();
+    for i in 2..=20 {
+        let id = manager.new_workspace(&format!("Workspace {}", i)).unwrap();
+        created_ids.push(id);
+    }
+
+    assert_eq!(manager.workspaces.len(), 20);
+
+    // Verify all 20 colors are unique
+    let mut colors_set = std::collections::HashSet::new();
+    for ws in &manager.workspaces {
+        let color = ws.color.as_ref().expect("Each workspace must have an assigned color");
+        assert!(colors_set.insert(color.to_lowercase()), "Color {} was assigned more than once!", color);
+    }
+    assert_eq!(colors_set.len(), 20);
+}
+
+#[test]
+fn test_workspace_custom_color_and_background_persistence() {
+    let mut manager = WorkspaceManager::new();
+    let ws_id = manager.workspaces[0].id.clone();
+
+    // Set custom accent color and background
+    manager.set_workspace_color(&ws_id, Some("#ff79c6".to_string())).unwrap();
+    manager.set_workspace_background(&ws_id, Some("#16161e".to_string())).unwrap();
+
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.color.as_deref(), Some("#ff79c6"));
+    assert_eq!(ws.background.as_deref(), Some("#16161e"));
+    assert_eq!(ws.effective_color_u32(0), 0xff79c6);
+    assert_eq!(ws.effective_background_u32(0x1a1b26), 0x16161e);
+
+    // Serialize snapshot to json
+    let json = save_snapshot_to_string(&manager).expect("Serialization succeeds");
+    assert!(json.contains("#ff79c6"));
+    assert!(json.contains("#16161e"));
+
+    // Deserialize and check equality
+    let restored = load_snapshot_from_str(&json).expect("Deserialization succeeds");
+    let restored_ws = restored.get_active_workspace().unwrap();
+    assert_eq!(restored_ws.color.as_deref(), Some("#ff79c6"));
+    assert_eq!(restored_ws.background.as_deref(), Some("#16161e"));
+}
+
+#[test]
+fn test_workspace_legacy_snapshot_backwards_compatibility() {
+    // Legacy snapshot without color or background fields
+    let legacy_json = r#"{
+        "workspaces": [
+            {
+                "id": "ws_legacy",
+                "name": "Legacy",
+                "tabs": [
+                    {
+                        "id": "tab_1",
+                        "title": "Shell",
+                        "cwd": "/tmp",
+                        "scrollback_cache": []
+                    }
+                ],
+                "active_tab_id": "tab_1"
+            }
+        ],
+        "active_workspace_id": "ws_legacy",
+        "next_id": 2
+    }"#;
+
+    let mut restored = load_snapshot_from_str(legacy_json).expect("Legacy deserialization succeeds");
+    assert_eq!(restored.workspaces.len(), 1);
+    let ws = &restored.workspaces[0];
+    assert!(ws.color.is_none());
+    assert!(ws.background.is_none());
+
+    // When ensure_distinct_colors is called, it populates missing color
+    restored.ensure_distinct_colors();
+    assert!(restored.workspaces[0].color.is_some());
+}
+
 
 
 

@@ -108,29 +108,30 @@ pub fn calculate_modal_buttons(
     footer_h: f32,
     scale: f32,
     cell_w: f32,
-) -> [ModalButton; 5] {
+) -> [ModalButton; 6] {
     let btn_h = (footer_h - 14.0 * scale).max(20.0);
     let btn_y = modal_rect.y + modal_rect.height - footer_h + ((footer_h - btn_h) * 0.5);
 
-    let items: [(&'static str, &'static str, u32); 5] = [
+    let items: [(&'static str, &'static str, u32); 6] = [
         ("new", "[n] New", 0x007AA2F7),
         ("rename", "[r] Rename", 0x007AA2F7),
+        ("color", "[c] Color", 0x00E0AF68),
         ("delete", "[d] Delete", 0x00F7768E),
         ("window", "[w] Window", 0x00BB9AF7),
         ("switch", "[Enter] Switch", 0x009ECE6A),
     ];
 
-    let pad_inner = 6.0 * scale;
-    let mut gap = 5.0 * scale;
+    let pad_inner = 5.0 * scale;
+    let mut gap = 4.0 * scale;
 
-    let mut widths = [0.0f32; 5];
+    let mut widths = [0.0f32; 6];
     let mut total_w = 0.0f32;
     for (i, (_, text, _)) in items.iter().enumerate() {
         let w = (text.chars().count() as f32 * cell_w) + pad_inner * 2.0;
         widths[i] = w;
         total_w += w;
     }
-    total_w += gap * 4.0;
+    total_w += gap * 5.0;
 
     let avail_w = modal_rect.width - (16.0 * scale);
     if total_w > avail_w && avail_w > 100.0 {
@@ -186,6 +187,15 @@ pub fn calculate_modal_buttons(
                 label: items[4].1,
                 rect: Rect { x: cur_x, y: btn_y, width: widths[4], height: btn_h },
                 color: items[4].2,
+            }
+        },
+        {
+            cur_x += widths[4] + gap;
+            ModalButton {
+                id: items[5].0,
+                label: items[5].1,
+                rect: Rect { x: cur_x, y: btn_y, width: widths[5], height: btn_h },
+                color: items[5].2,
             }
         },
     ]

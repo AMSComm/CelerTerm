@@ -24,6 +24,10 @@ impl Tab {
 pub struct Workspace {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub background: Option<String>,
     pub tabs: Vec<Tab>,
     pub active_tab_id: String,
 }
@@ -35,8 +39,54 @@ impl Workspace {
         Self {
             id: initial_tab_id.split('_').next().unwrap_or("ws").to_string(),
             name: name.into(),
+            color: None,
+            background: None,
             tabs: vec![tab],
             active_tab_id: initial_tab_id,
+        }
+    }
+
+    pub fn new_with_color(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        initial_cwd: PathBuf,
+        color: Option<String>,
+        background: Option<String>,
+    ) -> Self {
+        let initial_tab_id = format!("{}_tab_1", id.into());
+        let tab = Tab::new(&initial_tab_id, "Shell", initial_cwd);
+        Self {
+            id: initial_tab_id.split('_').next().unwrap_or("ws").to_string(),
+            name: name.into(),
+            color,
+            background,
+            tabs: vec![tab],
+            active_tab_id: initial_tab_id,
+        }
+    }
+
+    pub fn effective_color_u32(&self, fallback_idx: usize) -> u32 {
+        if let Some(ref c) = self.color {
+            crate::renderer::color::parse_hex_color(
+                c,
+                super::palette::WORKSPACE_ACCENT_PALETTE[fallback_idx % super::palette::WORKSPACE_ACCENT_PALETTE.len()].u32_val,
+            )
+        } else {
+            super::palette::WORKSPACE_ACCENT_PALETTE[fallback_idx % super::palette::WORKSPACE_ACCENT_PALETTE.len()].u32_val
+        }
+    }
+
+    pub fn effective_color_hex(&self, fallback_idx: usize) -> String {
+        self.color.clone().unwrap_or_else(|| {
+            super::palette::WORKSPACE_ACCENT_PALETTE[fallback_idx % super::palette::WORKSPACE_ACCENT_PALETTE.len()].hex.to_string()
+        })
+    }
+
+    pub fn effective_background_u32(&self, default_bg: u32) -> u32 {
+        if let Some(ref bg) = self.background {
+            crate::renderer::color::parse_hex_color(bg, default_bg)
+        } else {
+            default_bg
         }
     }
 }
@@ -61,9 +111,12 @@ impl WorkspaceManager {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
         let initial_title = crate::pty::format_tab_title(None, Some(&default_cwd), None);
         let default_tab = Tab::new("tab_1", initial_title, default_cwd);
+        let default_color = super::palette::WORKSPACE_ACCENT_PALETTE[0].hex.to_string();
         let default_ws = Workspace {
             id: "ws_default".to_string(),
             name: "Default".to_string(),
+            color: Some(default_color),
+            background: None,
             tabs: vec![default_tab],
             active_tab_id: "tab_1".to_string(),
         };
@@ -72,6 +125,32 @@ impl WorkspaceManager {
             workspaces: vec![default_ws],
             active_workspace_id: "ws_default".to_string(),
             next_id: 2,
+        }
+    }
+
+    pub fn pick_distinct_color(&self) -> String {
+        let used_colors: std::collections::HashSet<String> = self.workspaces
+            .iter()
+            .filter_map(|w| w.color.as_ref().map(|c| c.trim().to_lowercase()))
+            .collect();
+
+        for palette in super::palette::WORKSPACE_ACCENT_PALETTE {
+            if !used_colors.contains(&palette.hex.to_lowercase()) {
+                return palette.hex.to_string();
+            }
+        }
+
+        // If all 20 colors are used, cycle by index
+        let idx = self.workspaces.len() % super::palette::WORKSPACE_ACCENT_PALETTE.len();
+        super::palette::WORKSPACE_ACCENT_PALETTE[idx].hex.to_string()
+    }
+
+    pub fn ensure_distinct_colors(&mut self) {
+        for i in 0..self.workspaces.len() {
+            if self.workspaces[i].color.is_none() {
+                let distinct = self.pick_distinct_color();
+                self.workspaces[i].color = Some(distinct);
+            }
         }
     }
 
@@ -123,9 +202,12 @@ impl WorkspaceManager {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
         let initial_title = crate::pty::format_tab_title(None, Some(&cwd), None);
         let tab = Tab::new(&tab_id, initial_title, cwd);
+        let color = self.pick_distinct_color();
         let ws = Workspace {
             id: ws_id.clone(),
             name: name.to_string(),
+            color: Some(color),
+            background: None,
             tabs: vec![tab],
             active_tab_id: tab_id,
         };
@@ -133,6 +215,24 @@ impl WorkspaceManager {
         self.workspaces.push(ws);
         self.active_workspace_id = ws_id.clone();
         Ok(ws_id)
+    }
+
+    pub fn set_workspace_color(&mut self, workspace_id: &str, color: Option<String>) -> Result<(), String> {
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
+            ws.color = color;
+            Ok(())
+        } else {
+            Err("Workspace not found".to_string())
+        }
+    }
+
+    pub fn set_workspace_background(&mut self, workspace_id: &str, background: Option<String>) -> Result<(), String> {
+        if let Some(ws) = self.workspaces.iter_mut().find(|w| w.id == workspace_id) {
+            ws.background = background;
+            Ok(())
+        } else {
+            Err("Workspace not found".to_string())
+        }
     }
 
     pub fn switch_workspace(&mut self, workspace_id: &str) -> Result<(), String> {
