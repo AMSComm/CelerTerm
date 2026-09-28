@@ -7,6 +7,8 @@ pub struct Tab {
     pub title: String,
     pub cwd: PathBuf,
     pub scrollback_cache: Vec<String>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 impl Tab {
@@ -16,6 +18,30 @@ impl Tab {
             title: title.into(),
             cwd,
             scrollback_cache: Vec::new(),
+            color: None,
+        }
+    }
+
+    pub fn new_with_color(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        cwd: PathBuf,
+        color: Option<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            cwd,
+            scrollback_cache: Vec::new(),
+            color,
+        }
+    }
+
+    pub fn effective_color_u32(&self, fallback: u32) -> u32 {
+        if let Some(ref c) = self.color {
+            crate::renderer::color::parse_hex_color(c, fallback)
+        } else {
+            fallback
         }
     }
 }
@@ -233,6 +259,16 @@ impl WorkspaceManager {
         } else {
             Err("Workspace not found".to_string())
         }
+    }
+
+    pub fn set_tab_color(&mut self, tab_id: &str, color: Option<String>) -> Result<(), String> {
+        for ws in &mut self.workspaces {
+            if let Some(tab) = ws.tabs.iter_mut().find(|t| t.id == tab_id) {
+                tab.color = color;
+                return Ok(());
+            }
+        }
+        Err("Tab not found".to_string())
     }
 
     pub fn switch_workspace(&mut self, workspace_id: &str) -> Result<(), String> {

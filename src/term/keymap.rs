@@ -24,6 +24,7 @@ pub enum KeyAction {
     PreviousWorkspace,
     NextWorkspace,
     ToggleWorkspaceModal,
+    CustomizeTabColor,
     ReloadConfig,
     CheckForUpdates,
     Paste,
@@ -53,6 +54,7 @@ pub fn translate_key_event(
                     "{" | "[" => return Some(KeyAction::PreviousWorkspace),
                     "}" | "]" => return Some(KeyAction::NextWorkspace),
                     "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
+                    "T" | "t" | "K" | "k" => return Some(KeyAction::CustomizeTabColor),
                     "R" | "r" => return Some(KeyAction::ReloadConfig),
                     "U" | "u" => return Some(KeyAction::CheckForUpdates),
                     _ => {}
@@ -97,6 +99,7 @@ pub fn translate_key_event(
         if let Key::Character(ch) = key {
             match ch.as_str() {
                 "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
+                "T" | "t" | "K" | "k" => return Some(KeyAction::CustomizeTabColor),
                 "R" | "r" => return Some(KeyAction::ReloadConfig),
                 "N" | "n" => return Some(KeyAction::NewWorkspace),
                 "U" | "u" => return Some(KeyAction::CheckForUpdates),

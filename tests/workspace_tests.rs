@@ -781,6 +781,47 @@ fn test_workspace_legacy_snapshot_backwards_compatibility() {
     assert!(restored.workspaces[0].color.is_some());
 }
 
+#[test]
+fn test_tab_color_customization_and_persistence() {
+    let mut manager = WorkspaceManager::new();
+    let ws = manager.get_active_workspace().unwrap();
+    let tab1_id = ws.tabs[0].id.clone();
+
+    // Default tab has no color override
+    assert_eq!(ws.tabs[0].color, None);
+    assert_eq!(ws.tabs[0].effective_color_u32(0x007AA2F7), 0x007AA2F7);
+
+    // Set custom color for tab 1
+    manager.set_tab_color(&tab1_id, Some("#bb9af7".to_string())).expect("Set tab color succeeds");
+    let active_ws = manager.get_active_workspace().unwrap();
+    assert_eq!(active_ws.tabs[0].color.as_deref(), Some("#bb9af7"));
+    assert_eq!(active_ws.tabs[0].effective_color_u32(0x007AA2F7), 0x00BB9AF7);
+
+    // Add a second tab without override
+    let _tab2_id = manager.new_tab(PathBuf::from("/tmp")).unwrap();
+    let active_ws = manager.get_active_workspace().unwrap();
+    assert_eq!(active_ws.tabs[1].color, None);
+    assert_eq!(active_ws.tabs[1].effective_color_u32(0x002AC3DE), 0x002AC3DE);
+
+    // Error on non-existent tab
+    assert!(manager.set_tab_color("non_existent_tab", Some("#ff007f".to_string())).is_err());
+
+    // Serialize and deserialize snapshot
+    let json = save_snapshot_to_string(&manager).expect("Serialize to json succeeds");
+    assert!(json.contains("#bb9af7"));
+
+    let restored = load_snapshot_from_str(&json).expect("Deserialize succeeds");
+    let r_ws = restored.get_active_workspace().unwrap();
+    assert_eq!(r_ws.tabs[0].color.as_deref(), Some("#bb9af7"));
+    assert_eq!(r_ws.tabs[1].color, None);
+
+    // Reset tab 1 color to None (inherits workspace)
+    manager.set_tab_color(&tab1_id, None).expect("Reset tab color succeeds");
+    let active_ws = manager.get_active_workspace().unwrap();
+    assert_eq!(active_ws.tabs[0].color, None);
+}
+
+
 
 
 

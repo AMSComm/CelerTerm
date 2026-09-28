@@ -126,6 +126,31 @@ impl Default for UpdateModalState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TabColorModalState {
+    pub is_open: bool,
+    pub target_tab_id: String,
+    pub target_tab_title: String,
+    pub selected_swatch_idx: usize,
+    pub hex_input: String,
+    pub anchor_x: f32,
+    pub anchor_y: f32,
+}
+
+impl Default for TabColorModalState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            target_tab_id: String::new(),
+            target_tab_title: String::new(),
+            selected_swatch_idx: 0,
+            hex_input: String::new(),
+            anchor_x: 0.0,
+            anchor_y: 0.0,
+        }
+    }
+}
+
 pub struct CelerApp {
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
@@ -133,6 +158,7 @@ pub struct CelerApp {
     workspace_mgr: WorkspaceManager,
     workspace_modal: WorkspaceModalState,
     update_modal: UpdateModalState,
+    tab_color_modal: TabColorModalState,
     app_menu_open: bool,
     tab_sessions: HashMap<String, TabSession>,
     renderer: TextRenderer,
@@ -255,6 +281,7 @@ impl CelerApp {
             workspace_mgr,
             workspace_modal: WorkspaceModalState::default(),
             update_modal: UpdateModalState::default(),
+            tab_color_modal: TabColorModalState::default(),
             app_menu_open: false,
             tab_sessions: HashMap::new(),
             renderer,
@@ -933,6 +960,93 @@ impl CelerApp {
         }
     }
 
+    pub fn open_tab_color_modal(&mut self, tab_id: &str, anchor_x: f32, anchor_y: f32) {
+        let ws = self.workspace_mgr.get_active_workspace();
+        let target_tab = ws.and_then(|w| w.tabs.iter().find(|t| t.id == tab_id));
+        let tab_title = target_tab.map(|t| t.title.clone()).unwrap_or_else(|| "Tab".to_string());
+        let current_color = target_tab.and_then(|t| t.color.clone());
+        let hex_val = current_color.as_deref().unwrap_or("7aa2f7").trim_start_matches('#').to_string();
+        let selected_swatch = crate::workspace::WORKSPACE_ACCENT_PALETTE
+            .iter()
+            .position(|p| p.hex.eq_ignore_ascii_case(&format!("#{}", hex_val)))
+            .unwrap_or(0);
+
+        self.tab_color_modal = TabColorModalState {
+            is_open: true,
+            target_tab_id: tab_id.to_string(),
+            target_tab_title: tab_title,
+            selected_swatch_idx: selected_swatch,
+            hex_input: hex_val,
+            anchor_x,
+            anchor_y,
+        };
+    }
+
+    fn handle_tab_color_modal_key(&mut self, key: &winit::keyboard::Key) {
+        match key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                self.tab_color_modal.is_open = false;
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                let chosen_hex = if self.tab_color_modal.hex_input.len() == 6 && self.tab_color_modal.hex_input.chars().all(|c| c.is_ascii_hexdigit()) {
+                    format!("#{}", self.tab_color_modal.hex_input.to_lowercase())
+                } else if let Some(norm) = crate::workspace::normalize_hex(&self.tab_color_modal.hex_input) {
+                    norm
+                } else {
+                    crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx % crate::workspace::WORKSPACE_ACCENT_PALETTE.len()].hex.to_string()
+                };
+
+                let _ = self.workspace_mgr.set_tab_color(&self.tab_color_modal.target_tab_id, Some(chosen_hex));
+                self.save_workspace_state();
+                self.tab_color_modal.is_open = false;
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                self.tab_color_modal.hex_input.pop();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
+                self.tab_color_modal.selected_swatch_idx = self.tab_color_modal.selected_swatch_idx.saturating_sub(1);
+                self.tab_color_modal.hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx].hex.trim_start_matches('#').to_string();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
+                if self.tab_color_modal.selected_swatch_idx + 1 < crate::workspace::WORKSPACE_ACCENT_PALETTE.len() {
+                    self.tab_color_modal.selected_swatch_idx += 1;
+                    self.tab_color_modal.hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                if self.tab_color_modal.selected_swatch_idx >= 10 {
+                    self.tab_color_modal.selected_swatch_idx -= 10;
+                    self.tab_color_modal.hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                if self.tab_color_modal.selected_swatch_idx + 10 < crate::workspace::WORKSPACE_ACCENT_PALETTE.len() {
+                    self.tab_color_modal.selected_swatch_idx += 10;
+                    self.tab_color_modal.hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx].hex.trim_start_matches('#').to_string();
+                }
+            }
+            winit::keyboard::Key::Character(s) => {
+                match s.as_str() {
+                    "r" | "R" => {
+                        let _ = self.workspace_mgr.set_tab_color(&self.tab_color_modal.target_tab_id, None);
+                        self.save_workspace_state();
+                        self.tab_color_modal.is_open = false;
+                    }
+                    ch => {
+                        for c in ch.chars() {
+                            if (c.is_ascii_hexdigit() || c == '#') && self.tab_color_modal.hex_input.len() < 6 {
+                                if c != '#' {
+                                    self.tab_color_modal.hex_input.push(c.to_ascii_lowercase());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn start_check_for_updates(&mut self) {
         self.update_modal.is_open = true;
         self.update_modal.state = crate::update::UpdateState::Checking;
@@ -1264,7 +1378,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 };
 
                 if let Some(ref win) = self.window {
-                    if self.workspace_modal.is_open || self.update_modal.is_open || self.app_menu_open {
+                    if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.app_menu_open {
                         win.set_cursor(CursorIcon::Default);
                     } else if (position.y as f32) > header_h {
                         win.set_cursor(CursorIcon::Text);
@@ -1313,7 +1427,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             win.request_redraw();
                         }
                     }
-                } else if (self.workspace_modal.is_open || self.update_modal.is_open || self.app_menu_open)
+                } else if (self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.app_menu_open)
                     && let Some(ref win) = self.window
                 {
                     win.request_redraw();
@@ -1559,6 +1673,110 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
                         return;
+                    }
+
+                    if self.tab_color_modal.is_open {
+                        let (width, height) = (size.width as f32, size.height as f32);
+                        let scale = self.scale_factor;
+                        let modal_w = (460.0 * scale).min(width - 32.0);
+                        let header_h = (34.0 * scale).round();
+                        let swatches_h = (68.0 * scale).round();
+                        let input_preview_h = (40.0 * scale).round();
+                        let footer_h = (38.0 * scale).round();
+                        let modal_h = header_h + swatches_h + input_preview_h + footer_h + (16.0 * scale);
+
+                        let modal_x = if self.tab_color_modal.anchor_x > 0.0 || self.tab_color_modal.anchor_y > 0.0 {
+                            self.tab_color_modal.anchor_x.min(width - modal_w - 16.0).max(16.0)
+                        } else {
+                            ((width - modal_w) * 0.5).max(10.0)
+                        };
+                        let modal_y = if self.tab_color_modal.anchor_x > 0.0 || self.tab_color_modal.anchor_y > 0.0 {
+                            self.tab_color_modal.anchor_y.min(height - modal_h - 16.0).max(16.0)
+                        } else {
+                            let h_height = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
+                            (h_height + (8.0 * scale)).min(height - modal_h - 16.0).max(10.0)
+                        };
+
+                        let modal_rect = crate::window::tabs::Rect { x: modal_x, y: modal_y, width: modal_w, height: modal_h };
+                        if !modal_rect.contains(mx, my) {
+                            self.tab_color_modal.is_open = false;
+                            window.request_redraw();
+                        } else if button == MouseButton::Left {
+                            // 1. Close button in header [Esc]
+                            let esc_label = "[Esc] Close";
+                            let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                            let esc_x = modal_x + modal_w - esc_w - (16.0 * scale);
+                            if my >= modal_y && my <= modal_y + header_h && mx >= esc_x {
+                                self.tab_color_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // 2. Swatches clicks
+                            let swatches_y = modal_y + header_h + (10.0 * scale);
+                            let box_w = (32.0 * scale).round();
+                            let box_h = (24.0 * scale).round();
+                            let gap = (8.0 * scale).round();
+                            let swatches_total_w = 10.0 * box_w + 9.0 * gap;
+                            let swatches_x = modal_x + ((modal_w - swatches_total_w) * 0.5).max(0.0);
+
+                            for i in 0..20 {
+                                let col = i % 10;
+                                let row = i / 10;
+                                let sx = swatches_x + col as f32 * (box_w + gap);
+                                let sy = swatches_y + row as f32 * (box_h + gap);
+                                let s_rect = crate::window::tabs::Rect { x: sx, y: sy, width: box_w, height: box_h };
+                                if s_rect.contains(mx, my) {
+                                    self.tab_color_modal.selected_swatch_idx = i;
+                                    self.tab_color_modal.hex_input = crate::workspace::WORKSPACE_ACCENT_PALETTE[i].hex.trim_start_matches('#').to_string();
+                                    window.request_redraw();
+                                    return;
+                                }
+                            }
+
+                            // 3. Reset Button [r]
+                            let input_y = swatches_y + (2.0 * box_h) + gap + (12.0 * scale);
+                            let reset_btn_w = (140.0 * scale).round();
+                            let reset_btn_h = (28.0 * scale).round();
+                            let reset_btn_x = modal_x + modal_w - reset_btn_w - (16.0 * scale);
+                            let reset_rect = crate::window::tabs::Rect { x: reset_btn_x, y: input_y, width: reset_btn_w, height: reset_btn_h };
+                            if reset_rect.contains(mx, my) {
+                                let _ = self.workspace_mgr.set_tab_color(&self.tab_color_modal.target_tab_id, None);
+                                self.save_workspace_state();
+                                self.tab_color_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // 4. Footer buttons: Apply [Enter] vs Cancel [Esc]
+                            let footer_y = modal_y + modal_h - footer_h;
+                            let apply_btn_w = (120.0 * scale).round();
+                            let apply_btn_h = (28.0 * scale).round();
+                            let apply_rect = crate::window::tabs::Rect { x: modal_x + (16.0 * scale), y: footer_y + (4.0 * scale), width: apply_btn_w, height: apply_btn_h };
+                            if apply_rect.contains(mx, my) {
+                                let chosen_hex = if self.tab_color_modal.hex_input.len() == 6 && self.tab_color_modal.hex_input.chars().all(|c| c.is_ascii_hexdigit()) {
+                                    format!("#{}", self.tab_color_modal.hex_input.to_lowercase())
+                                } else if let Some(norm) = crate::workspace::normalize_hex(&self.tab_color_modal.hex_input) {
+                                    norm
+                                } else {
+                                    crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx % crate::workspace::WORKSPACE_ACCENT_PALETTE.len()].hex.to_string()
+                                };
+                                let _ = self.workspace_mgr.set_tab_color(&self.tab_color_modal.target_tab_id, Some(chosen_hex));
+                                self.save_workspace_state();
+                                self.tab_color_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            let cancel_rect = crate::window::tabs::Rect { x: modal_x + (28.0 * scale) + apply_btn_w, y: footer_y + (4.0 * scale), width: (80.0 * scale).round(), height: apply_btn_h };
+                            if cancel_rect.contains(mx, my) {
+                                self.tab_color_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            return;
+                        }
                     }
 
                     if self.workspace_modal.is_open {
@@ -1971,6 +2189,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     ws.active_tab_id = tab_id.clone();
                                     self.ensure_tab_session(tab_id);
                                     window.request_redraw();
+                                } else if button == MouseButton::Right {
+                                    self.open_tab_color_modal(tab_id, rect.x, rect.y + rect.height);
+                                    window.request_redraw();
                                 }
                                 clicked_tab = true;
                                 break;
@@ -2145,6 +2366,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
+                if self.tab_color_modal.is_open {
+                    self.handle_tab_color_modal_key(&logical_key);
+                    if let Some(ref win) = window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 if self.workspace_modal.is_open {
                     self.handle_modal_key(&logical_key, match physical_key {
                         PhysicalKey::Code(c) => Some(c),
@@ -2300,6 +2529,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                             if let Some(ref win) = window {
                                 win.request_redraw();
+                            }
+                        }
+                        KeyAction::CustomizeTabColor => {
+                            if let Some(active_id) = self.active_tab_id() {
+                                self.open_tab_color_modal(&active_id, 0.0, 0.0);
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
                             }
                         }
                         KeyAction::ReloadConfig => {
@@ -2516,13 +2753,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let raw_tabs = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.tabs.clone())
                         .unwrap_or_default();
-                    let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
-                        (t.id.clone(), format!("{}. {}", idx + 1, t.title))
-                    }).collect();
 
                     let active_tab_id = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.active_tab_id.clone())
                         .unwrap_or_default();
+
+                    let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
+                        let is_active = t.id == active_tab_id;
+                        let has_custom = t.color.is_some();
+                        let prefix = if is_active || has_custom { "● " } else { "" };
+                        (t.id.clone(), format!("{}{}. {}", prefix, idx + 1, t.title))
+                    }).collect();
 
                     let active_ws_name = self.workspace_mgr.get_active_workspace()
                         .map(|ws| ws.name.clone())
@@ -2639,6 +2880,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let tab_bg = if is_active { 0x0024283B } else { 0x001A1B26 };
                             let tab_fg = if is_active { 0x00C0CAF5 } else { 0x00787C99 };
 
+                            let raw_tab = raw_tabs.get(idx);
+                            let has_custom = raw_tab.and_then(|t| t.color.as_ref()).is_some();
+                            let tab_color_u32 = raw_tab
+                                .map(|t| t.effective_color_u32(active_accent))
+                                .unwrap_or(active_accent);
+
                             TextRenderer::draw_rect(
                                 &mut buffer,
                                 width,
@@ -2650,16 +2897,45 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 tab_bg,
                             );
 
+                            // Active tab top accent stripe (2px)
+                            if is_active {
+                                let stripe_h = (2.0 * self.scale_factor).round().max(1.0) as usize;
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    rect.x as usize,
+                                    rect.y as usize,
+                                    rect.width as usize,
+                                    stripe_h,
+                                    tab_color_u32,
+                                );
+                            }
+
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
-                            let tab_text_x = rect.x + (6.0 * self.scale_factor);
-                            let tab_title = tabs.get(idx).map(|t| t.1.as_str()).unwrap_or("Tab");
+                            let mut tab_text_x = rect.x + (6.0 * self.scale_factor);
+
+                            if is_active || has_custom {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    tab_text_x,
+                                    tab_text_y,
+                                    "● ",
+                                    tab_color_u32,
+                                );
+                                tab_text_x += 2.0 * self.renderer.cell_width;
+                            }
+
+                            let base_title = format!("{}. {}", idx + 1, raw_tab.map(|t| t.title.as_str()).unwrap_or("Tab"));
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
                                 height,
                                 tab_text_x,
                                 tab_text_y,
-                                tab_title,
+                                &base_title,
                                 tab_fg,
                             );
 
@@ -2965,7 +3241,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
 
                     // 4. Dim backdrop if any modal is open
-                    if self.workspace_modal.is_open || self.update_modal.is_open {
+                    if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open {
                         // Dim backdrop (50% opacity blend)
                         for pixel in buffer.iter_mut() {
                             let p = *pixel;
@@ -4030,6 +4306,289 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 );
                             }
                         }
+                    }
+
+                    // 7. Render Tab Color Customization Popover if open
+                    if self.tab_color_modal.is_open {
+                        let scale = self.scale_factor;
+                        let modal_w = (460.0 * scale).min(width as f32 - 32.0);
+                        let header_h = (34.0 * scale).round();
+                        let swatches_h = (68.0 * scale).round();
+                        let input_preview_h = (40.0 * scale).round();
+                        let footer_h = (38.0 * scale).round();
+                        let modal_h = header_h + swatches_h + input_preview_h + footer_h + (16.0 * scale);
+
+                        let modal_x = if self.tab_color_modal.anchor_x > 0.0 || self.tab_color_modal.anchor_y > 0.0 {
+                            self.tab_color_modal.anchor_x.min(width as f32 - modal_w - 16.0).max(16.0)
+                        } else {
+                            ((width as f32 - modal_w) * 0.5).max(10.0)
+                        };
+                        let modal_y = if self.tab_color_modal.anchor_x > 0.0 || self.tab_color_modal.anchor_y > 0.0 {
+                            self.tab_color_modal.anchor_y.min(height as f32 - modal_h - 16.0).max(16.0)
+                        } else {
+                            (header.height + (8.0 * scale)).min(height as f32 - modal_h - 16.0).max(10.0)
+                        };
+
+                        // Modal background (#1A1B26)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            modal_h as usize,
+                            0x001A1B26,
+                        );
+
+                        // Modal border (#3B4261, 1px)
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+
+                        // Header bar (#24283B)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            header_h as usize,
+                            0x0024283B,
+                        );
+
+                        let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        let title_text = format!("Tab Color: {}", self.tab_color_modal.target_tab_title);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + (16.0 * scale),
+                            head_text_y,
+                            &title_text,
+                            0x00C0CAF5,
+                        );
+
+                        let esc_label = "[Esc] Close";
+                        let esc_w = esc_label.len() as f32 * self.renderer.cell_width;
+                        let esc_x = modal_x + modal_w - esc_w - (16.0 * scale);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            esc_x,
+                            head_text_y,
+                            esc_label,
+                            0x00787C99,
+                        );
+
+                        // Swatches: 20 colors in 2 rows of 10
+                        let swatches_y = modal_y + header_h + (10.0 * scale);
+                        let box_w = (32.0 * scale).round();
+                        let box_h = (24.0 * scale).round();
+                        let gap = (8.0 * scale).round();
+                        let swatches_total_w = 10.0 * box_w + 9.0 * gap;
+                        let swatches_x = modal_x + ((modal_w - swatches_total_w) * 0.5).max(0.0);
+
+                        for (i, p) in crate::workspace::WORKSPACE_ACCENT_PALETTE.iter().enumerate() {
+                            let col = i % 10;
+                            let row = i / 10;
+                            let sx = swatches_x + col as f32 * (box_w + gap);
+                            let sy = swatches_y + row as f32 * (box_h + gap);
+
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                sx as usize,
+                                sy as usize,
+                                box_w as usize,
+                                box_h as usize,
+                                p.u32_val,
+                            );
+
+                            if i == self.tab_color_modal.selected_swatch_idx {
+                                draw_outline_rect(
+                                    &mut buffer,
+                                    (width, height),
+                                    (sx as usize, sy as usize, box_w as usize, box_h as usize),
+                                    2,
+                                    0x00FFFFFF,
+                                );
+                            } else {
+                                draw_outline_rect(
+                                    &mut buffer,
+                                    (width, height),
+                                    (sx as usize, sy as usize, box_w as usize, box_h as usize),
+                                    1,
+                                    0x0016161E,
+                                );
+                            }
+                        }
+
+                        // HEX Input & Preview Row
+                        let input_y = swatches_y + (2.0 * box_h) + gap + (12.0 * scale);
+                        let preview_w = (36.0 * scale).round();
+                        let preview_h = (28.0 * scale).round();
+                        let preview_x = modal_x + (16.0 * scale);
+
+                        let chosen_preview_u32 = if self.tab_color_modal.hex_input.len() == 6 && self.tab_color_modal.hex_input.chars().all(|c| c.is_ascii_hexdigit()) {
+                            crate::renderer::color::parse_hex_color(&format!("#{}", self.tab_color_modal.hex_input), 0x007AA2F7)
+                        } else {
+                            crate::workspace::WORKSPACE_ACCENT_PALETTE[self.tab_color_modal.selected_swatch_idx % crate::workspace::WORKSPACE_ACCENT_PALETTE.len()].u32_val
+                        };
+
+                        // Color preview swatch box
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            preview_x as usize,
+                            input_y as usize,
+                            preview_w as usize,
+                            preview_h as usize,
+                            chosen_preview_u32,
+                        );
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (preview_x as usize, input_y as usize, preview_w as usize, preview_h as usize),
+                            1,
+                            0x00FFFFFF,
+                        );
+
+                        // Input text display
+                        let input_box_x = preview_x + preview_w + (12.0 * scale);
+                        let input_box_w = (140.0 * scale).round();
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            input_box_x as usize,
+                            input_y as usize,
+                            input_box_w as usize,
+                            preview_h as usize,
+                            0x001F2335,
+                        );
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (input_box_x as usize, input_y as usize, input_box_w as usize, preview_h as usize),
+                            1,
+                            0x007AA2F7,
+                        );
+
+                        let input_text = format!("#{}█", self.tab_color_modal.hex_input);
+                        let itext_y = input_y + ((preview_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            input_box_x + (8.0 * scale),
+                            itext_y,
+                            &input_text,
+                            0x00C0CAF5,
+                        );
+
+                        // Reset button [r] Default
+                        let reset_btn_w = (150.0 * scale).round();
+                        let reset_btn_x = modal_x + modal_w - reset_btn_w - (16.0 * scale);
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+                        let reset_hovered = mx >= reset_btn_x && mx <= reset_btn_x + reset_btn_w && my >= input_y && my <= input_y + preview_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            reset_btn_x as usize,
+                            input_y as usize,
+                            reset_btn_w as usize,
+                            preview_h as usize,
+                            if reset_hovered { 0x00283457 } else { 0x0024283B },
+                        );
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (reset_btn_x as usize, input_y as usize, reset_btn_w as usize, preview_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            reset_btn_x + (8.0 * scale),
+                            itext_y,
+                            "↺ [r] Reset to Default",
+                            0x00A9B1D6,
+                        );
+
+                        // Footer: Apply [Enter] button & Cancel [Esc]
+                        let footer_y = modal_y + modal_h - footer_h;
+                        let apply_btn_w = (120.0 * scale).round();
+                        let apply_btn_h = (28.0 * scale).round();
+                        let apply_hovered = mx >= modal_x + (16.0 * scale) && mx <= modal_x + (16.0 * scale) + apply_btn_w && my >= footer_y + (4.0 * scale) && my <= footer_y + (4.0 * scale) + apply_btn_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            (modal_x + (16.0 * scale)) as usize,
+                            (footer_y + (4.0 * scale)) as usize,
+                            apply_btn_w as usize,
+                            apply_btn_h as usize,
+                            if apply_hovered { 0x003D59A1 } else { 0x00283457 },
+                        );
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            ((modal_x + (16.0 * scale)) as usize, (footer_y + (4.0 * scale)) as usize, apply_btn_w as usize, apply_btn_h as usize),
+                            1,
+                            chosen_preview_u32,
+                        );
+                        let apply_text_y = footer_y + (4.0 * scale) + ((apply_btn_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + (24.0 * scale),
+                            apply_text_y,
+                            "✓ [Enter] Apply",
+                            0x00C0CAF5,
+                        );
+
+                        let cancel_btn_w = (80.0 * scale).round();
+                        let cancel_btn_x = modal_x + (28.0 * scale) + apply_btn_w;
+                        let cancel_hovered = mx >= cancel_btn_x && mx <= cancel_btn_x + cancel_btn_w && my >= footer_y + (4.0 * scale) && my <= footer_y + (4.0 * scale) + apply_btn_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            cancel_btn_x as usize,
+                            (footer_y + (4.0 * scale)) as usize,
+                            cancel_btn_w as usize,
+                            apply_btn_h as usize,
+                            if cancel_hovered { 0x00283457 } else { 0x001F2335 },
+                        );
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (cancel_btn_x as usize, (footer_y + (4.0 * scale)) as usize, cancel_btn_w as usize, apply_btn_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            cancel_btn_x + (12.0 * scale),
+                            apply_text_y,
+                            "Cancel",
+                            0x00787C99,
+                        );
                     }
 
                     let _ = buffer.present();

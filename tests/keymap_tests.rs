@@ -632,3 +632,56 @@ fn test_workspace_modal_and_reload_config_shortcuts() {
     );
 }
 
+#[test]
+fn test_customize_tab_color_shortcuts() {
+    let cmd_shift = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        logo: true,
+    };
+
+    // macOS: Cmd+Shift+T and Cmd+Shift+K
+    assert_eq!(
+        translate_key(&Key::Character("T".into()), cmd_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("t".into()), cmd_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("K".into()), cmd_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("k".into()), cmd_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+
+    // Linux/Cross-platform: Ctrl+Shift+T and Ctrl+Shift+K
+    let ctrl_shift = Modifiers {
+        alt: false,
+        ctrl: true,
+        shift: true,
+        logo: false,
+    };
+    assert_eq!(
+        translate_key(&Key::Character("T".into()), ctrl_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("t".into()), ctrl_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("K".into()), ctrl_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("k".into()), ctrl_shift, true),
+        Some(KeyAction::CustomizeTabColor)
+    );
+}
+
+
