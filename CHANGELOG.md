@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.13] - 2026-09-29
+
+### Added & Improved
+
+- **Dynamic Tab Title Detection for Shell Scripts & Process Trees**:
+  - Implemented intelligent process detection that inspects command-line arguments (`KERN_PROCARGS2` on macOS and `/proc/{pid}/cmdline` on Linux) to resolve script names (e.g., `psql`, `psql9`, `gradlew`, `brew`, `deploy.sh`) when executed via shell interpreters (`sh`, `bash`, `zsh`).
+  - Added descendant process tree traversal (`proc_listchildpids` on macOS and `/proc/{pid}/task/{pid}/children` on Linux) up to depth 4 to locate leaf processes and container commands.
+  - Recognizes generic runners and container shims (`docker`, `podman`, `sudo`, `env`) while preserving specific script tool identities (e.g. `psql` executing PostgreSQL via Docker).
+  - Added 200ms throttling to `update_tab_titles` to guarantee zero frame overhead and minimal CPU consumption.
+
+### Fixed
+
+- **Redundant Escape Character Comparison**:
+  - Cleaned up duplicate escape matching in `keymap.rs` and `app.rs` for strict Clippy compliance.
+
 ## [0.2.12] - 2026-09-28
 
 ### Added & Improved
