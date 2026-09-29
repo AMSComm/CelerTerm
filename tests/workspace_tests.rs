@@ -247,6 +247,133 @@ fn test_format_tab_title_logic() {
         format_tab_title(Some("ssh"), Some(&PathBuf::from("/Users/test")), Some("user@server: ~")),
         "[🌐~]"
     );
+
+    // 5. Script and wrapper command formatting
+    assert_eq!(
+        format_tab_title(Some("psql"), Some(&PathBuf::from("/Users/test")), None),
+        "psql"
+    );
+    assert_eq!(
+        format_tab_title(Some("psql9"), Some(&PathBuf::from("/Users/test")), None),
+        "psql9"
+    );
+    assert_eq!(
+        format_tab_title(Some("pa2Hbia"), Some(&PathBuf::from("/Users/test")), None),
+        "pa2Hbia"
+    );
+    assert_eq!(
+        format_tab_title(Some("gradlew"), Some(&PathBuf::from("/Users/test")), None),
+        "gradlew"
+    );
+    assert_eq!(
+        format_tab_title(Some("docker"), Some(&PathBuf::from("/Users/test")), None),
+        "docker"
+    );
+}
+
+#[test]
+fn test_shell_script_and_wrapper_title_extraction() {
+    use celerterm::pty::{extract_command_from_shell_args, is_generic_runner, is_shell_name};
+
+    // Shell detection
+    assert!(is_shell_name("sh"));
+    assert!(is_shell_name("bash"));
+    assert!(is_shell_name("zsh"));
+    assert!(is_shell_name("fish"));
+    assert!(!is_shell_name("psql"));
+    assert!(!is_shell_name("psql9"));
+    assert!(!is_shell_name("docker"));
+    assert!(!is_shell_name("cargo"));
+
+    // Generic runner detection
+    assert!(is_generic_runner("docker"));
+    assert!(is_generic_runner("podman"));
+    assert!(is_generic_runner("sudo"));
+    assert!(is_generic_runner("env"));
+    assert!(!is_generic_runner("psql"));
+    assert!(!is_generic_runner("cargo"));
+
+    // Script wrapper extraction: shebang execution of psql / psql9 / pa2Hbia
+    let psql_args = vec!["/bin/sh".to_string(), "/Users/huy/app/bin/psql".to_string()];
+    assert_eq!(extract_command_from_shell_args(&psql_args), Some("psql".to_string()));
+
+    let psql9_args = vec![
+        "/bin/sh".to_string(),
+        "/Users/huy/app/bin/psql9".to_string(),
+        "host=172.1.0.141".to_string(),
+    ];
+    assert_eq!(extract_command_from_shell_args(&psql9_args), Some("psql9".to_string()));
+
+    let pa2hbia_args = vec!["/bin/sh".to_string(), "/Users/huy/app/bin/pa2Hbia".to_string()];
+    assert_eq!(extract_command_from_shell_args(&pa2hbia_args), Some("pa2Hbia".to_string()));
+
+    // Script with flags before path
+    let flag_args = vec![
+        "/bin/sh".to_string(),
+        "-e".to_string(),
+        "-x".to_string(),
+        "/opt/tools/gradlew".to_string(),
+        "build".to_string(),
+    ];
+    assert_eq!(extract_command_from_shell_args(&flag_args), Some("gradlew".to_string()));
+
+    // -c command string extraction
+    let c_args = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "docker run --rm -ti psql9 psql".to_string(),
+    ];
+    assert_eq!(extract_command_from_shell_args(&c_args), Some("docker".to_string()));
+
+    let c_psql_args = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "psql -h localhost -d test".to_string(),
+    ];
+    assert_eq!(extract_command_from_shell_args(&c_psql_args), Some("psql".to_string()));
+
+    // Idle shell with no script
+    let idle_login = vec!["/bin/zsh".to_string(), "-l".to_string()];
+    assert_eq!(extract_command_from_shell_args(&idle_login), None);
+
+    let idle_bash = vec!["/bin/bash".to_string()];
+    assert_eq!(extract_command_from_shell_args(&idle_bash), None);
+
+    // Live process resolution test
+    use celerterm::pty::get_process_name;
+    let my_name = get_process_name(std::process::id());
+    assert!(my_name.is_some());
+    assert!(!my_name.unwrap().is_empty());
+}
+
+#[test]
+fn test_script_wrapper_live_process_name() {
+    use celerterm::pty::get_process_name;
+    use std::process::Command;
+
+    // Create a temporary shell script named "psql_dummy_test"
+    let tmp_dir = tempdir().expect("tempdir succeeds");
+    let script_path = tmp_dir.path().join("psql_dummy_test");
+    std::fs::write(&script_path, "#!/bin/sh\nsleep 3\n").expect("write script succeeds");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    let mut child = Command::new(&script_path)
+        .spawn()
+        .expect("spawn script succeeds");
+
+    let pid = child.id();
+    let detected_name = get_process_name(pid);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(detected_name, Some("psql_dummy_test".to_string()));
 }
 
 #[test]

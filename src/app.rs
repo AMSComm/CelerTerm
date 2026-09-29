@@ -181,6 +181,7 @@ pub struct CelerApp {
     is_secondary_window: bool,
     deleted_workspace_ids: Vec<String>,
     last_snapshot_mtime: Option<std::time::SystemTime>,
+    last_title_update: Option<std::time::Instant>,
 }
 
 impl Default for CelerApp {
@@ -307,6 +308,7 @@ impl CelerApp {
             is_secondary_window,
             deleted_workspace_ids: Vec::new(),
             last_snapshot_mtime: None,
+            last_title_update: None,
         };
 
         if let Some(active_ws) = app.workspace_mgr.get_active_workspace() {
@@ -593,6 +595,14 @@ impl CelerApp {
     }
 
     pub fn update_tab_titles(&mut self) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last_title_update {
+            if now.duration_since(last) < std::time::Duration::from_millis(200) {
+                return;
+            }
+        }
+        self.last_title_update = Some(now);
+
         if let Some(ws) = self.workspace_mgr.get_active_workspace_mut() {
             for tab in &mut ws.tabs {
                 if let Some(session) = self.tab_sessions.get(&tab.id) {
@@ -2556,7 +2566,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
 
                 let is_escape_key = matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape))
-                    || matches!(logical_key, winit::keyboard::Key::Character(ref s) if s == "\x1b" || s == "\u{1b}")
+                    || matches!(logical_key, winit::keyboard::Key::Character(ref s) if s == "\x1b")
                     || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Escape));
 
                 if is_escape_key {

@@ -103,7 +103,7 @@ pub fn translate_key_event(
 
     // 0.05 Dedicated Escape key handling (handles NamedKey, KeyCode::Escape, and raw ESC character \x1b)
     let is_escape = matches!(key, Key::Named(NamedKey::Escape))
-        || matches!(key, Key::Character(s) if s == "\x1b" || s == "\u{1b}")
+        || matches!(key, Key::Character(s) if s == "\x1b")
         || physical_key == Some(KeyCode::Escape);
 
     if is_escape && !mods.logo {
