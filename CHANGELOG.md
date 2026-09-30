@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-09-30
+
+### Added & Improved
+
+- **Configurable Keybindings (`[keybindings]`) in `config.toml`**:
+  - Added support for custom user keybindings in `~/.config/celerterm/config.toml` using concise key-value notation.
+  - Allows mapping shortcuts (e.g., `"cmd+left" = "send_hex:01"`, `"cmd+right" = "send_hex:05"`, `"cmd+shift+[" = "previous_tab"`, `"cmd+shift+]" = "next_tab"`).
+  - Supports `send_hex:<hex>`, `send_bytes:<escaped_string>`, `send_text:<string>`, and internal application action triggers.
+- **Application Cursor Mode (DECCKM) & Terminal Navigation**:
+  - Dynamically switches Home, End, and Arrow escape sequences based on terminal `APP_CURSOR` state (`\x1bOH` / `\x1bOF` / `\x1bOA`..`\x1bOD` in application mode, `\x1b[H` / `\x1b[F` / `\x1b[A`..`\x1b[D` in normal mode).
+  - Full compatibility with Zsh (`smkx`), Vim, Neovim, Nano, Htop, Less, and Midnight Commander.
+- **Missing Navigation & Function Keys**:
+  - Added full support for `Insert` (`\x1b[2~`) and function keys `F1` - `F12` (`\x1bOP`..`\x1bOS`, `\x1b[15~`..`\x1b[24~`).
+  - Added word-jump navigation for `Ctrl + Left` (`\x1b[1;5D`), `Ctrl + Right` (`\x1b[1;5C`), `Ctrl + Up` (`\x1b[1;5A`), and `Ctrl + Down` (`\x1b[1;5B`).
+  - Added text-selection navigation for `Shift + Arrows` (`\x1b[1;2A`..`\x1b[1;2D`).
+  - Added robust `physical_key` fallback across Home, End, PageUp, PageDown, Insert, Delete, Arrows, and F1-F12 when macOS reports `Key::Unidentified`.
+
+### Fixed
+
+- **Neovim Alternate Buffer Switch (`Ctrl + 6` / `<C-^>`)**:
+  - Fixed an issue where pressing `Ctrl + 6` erroneously typed a literal character `"6"` instead of sending ASCII `0x1E` (Record Separator).
+  - Added comprehensive control key mappings for `Ctrl + 2` / `Ctrl + Space` (`0x00`), `Ctrl + 3` (`0x1B`), `Ctrl + 4` (`0x1C`), `Ctrl + 5` (`0x1D`), `Ctrl + 6` (`0x1E`), `Ctrl + 7` (`0x1F`), and `Ctrl + 8` (`0x7F`).
+
 ## [0.2.13] - 2026-09-29
 
 ### Added & Improved
