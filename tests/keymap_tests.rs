@@ -1,5 +1,5 @@
-use celerterm::term::keymap::{translate_key, translate_key_event, Modifiers, KeyAction};
-use winit::keyboard::{Key, NamedKey};
+use celerterm::term::keymap::{translate_key, translate_key_event, translate_key_event_full, Modifiers, KeyAction};
+use winit::keyboard::{Key, KeyCode, NamedKey};
 
 #[test]
 fn test_option_as_alt_character_key() {
@@ -793,6 +793,305 @@ fn test_cmd_backquote_cycle_next_window() {
         Some(KeyAction::CycleNextWindow)
     );
 }
+
+#[test]
+fn test_app_cursor_mode_home_end_and_arrows() {
+    let mods = Modifiers::default();
+
+    // 1. Normal mode (app_cursor = false) -> CSI sequences
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::Home), None, mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[H".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::End), None, mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[F".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowUp), None, mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[A".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowDown), None, mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[B".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowRight), None, mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[C".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowLeft), None, mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[D".to_vec()))
+    );
+
+    // 2. Application Cursor Mode (app_cursor = true, DECCKM) -> SS3 sequences
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::Home), None, mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOH".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::End), None, mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOF".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowUp), None, mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOA".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowDown), None, mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOB".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowRight), None, mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOC".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowLeft), None, mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOD".to_vec()))
+    );
+}
+
+#[test]
+fn test_physical_key_fallbacks_navigation() {
+    let mods = Modifiers::default();
+    let unidentified = Key::Unidentified(winit::keyboard::NativeKey::MacOS(0));
+
+    // Home & End via physical key
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::Home), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[H".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::Home), mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOH".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::End), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[F".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::End), mods, true, true, None),
+        Some(KeyAction::Bytes(b"\x1bOF".to_vec()))
+    );
+
+    // Insert, Delete, PageUp, PageDown via physical key
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::Insert), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[2~".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::Delete), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[3~".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::PageUp), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[5~".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::PageDown), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[6~".to_vec()))
+    );
+
+    // Arrows via physical key
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::ArrowUp), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[A".to_vec()))
+    );
+    assert_eq!(
+        translate_key_event_full(&unidentified, Some(KeyCode::ArrowDown), mods, true, false, None),
+        Some(KeyAction::Bytes(b"\x1b[B".to_vec()))
+    );
+}
+
+#[test]
+fn test_neovim_ctrl_6_alternate_buffer_and_special_ctrl_keys() {
+    let ctrl_mods = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+
+    // Ctrl+6 should emit 0x1E (Record Separator / <C-^>) for Neovim alternate buffer switch
+    assert_eq!(
+        translate_key(&Key::Character("6".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1e]))
+    );
+    assert_eq!(
+        translate_key_event(&Key::Character("6".into()), Some(KeyCode::Digit6), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1e]))
+    );
+    assert_eq!(
+        translate_key(&Key::Character("^".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1e]))
+    );
+
+    // Ctrl+2 / Ctrl+@ -> 0x00 (NUL)
+    assert_eq!(
+        translate_key(&Key::Character("2".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x00]))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::Space), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x00]))
+    );
+
+    // Ctrl+3 -> 0x1B (ESC)
+    assert_eq!(
+        translate_key(&Key::Character("3".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1b]))
+    );
+
+    // Ctrl+4 -> 0x1C (FS)
+    assert_eq!(
+        translate_key(&Key::Character("4".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1c]))
+    );
+
+    // Ctrl+5 -> 0x1D (GS)
+    assert_eq!(
+        translate_key(&Key::Character("5".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1d]))
+    );
+
+    // Ctrl+7 -> 0x1F (US)
+    assert_eq!(
+        translate_key(&Key::Character("7".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x1f]))
+    );
+
+    // Ctrl+8 -> 0x7F (DEL)
+    assert_eq!(
+        translate_key(&Key::Character("8".into()), ctrl_mods, true),
+        Some(KeyAction::Bytes(vec![0x7f]))
+    );
+}
+
+#[test]
+fn test_function_keys_f1_to_f12() {
+    let mods = Modifiers::default();
+
+    assert_eq!(translate_key(&Key::Named(NamedKey::F1), mods, true), Some(KeyAction::Bytes(b"\x1bOP".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F2), mods, true), Some(KeyAction::Bytes(b"\x1bOQ".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F3), mods, true), Some(KeyAction::Bytes(b"\x1bOR".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F4), mods, true), Some(KeyAction::Bytes(b"\x1bOS".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F5), mods, true), Some(KeyAction::Bytes(b"\x1b[15~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F6), mods, true), Some(KeyAction::Bytes(b"\x1b[17~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F7), mods, true), Some(KeyAction::Bytes(b"\x1b[18~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F8), mods, true), Some(KeyAction::Bytes(b"\x1b[19~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F9), mods, true), Some(KeyAction::Bytes(b"\x1b[20~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F10), mods, true), Some(KeyAction::Bytes(b"\x1b[21~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F11), mods, true), Some(KeyAction::Bytes(b"\x1b[23~".to_vec())));
+    assert_eq!(translate_key(&Key::Named(NamedKey::F12), mods, true), Some(KeyAction::Bytes(b"\x1b[24~".to_vec())));
+
+    // Physical key fallback for F1
+    let unidentified = Key::Unidentified(winit::keyboard::NativeKey::MacOS(0));
+    assert_eq!(
+        translate_key_event(&unidentified, Some(KeyCode::F1), mods, true),
+        Some(KeyAction::Bytes(b"\x1bOP".to_vec()))
+    );
+}
+
+#[test]
+fn test_modified_arrow_keys_ctrl_and_shift() {
+    let ctrl_mods = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let shift_mods = Modifiers {
+        shift: true,
+        ..Default::default()
+    };
+
+    // Ctrl + Arrows (word navigation in shells/CLI)
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowRight), ctrl_mods, true),
+        Some(KeyAction::Bytes(b"\x1b[1;5C".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowLeft), ctrl_mods, true),
+        Some(KeyAction::Bytes(b"\x1b[1;5D".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowUp), ctrl_mods, true),
+        Some(KeyAction::Bytes(b"\x1b[1;5A".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowDown), ctrl_mods, true),
+        Some(KeyAction::Bytes(b"\x1b[1;5B".to_vec()))
+    );
+
+    // Shift + Arrows (text selection in editors)
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowRight), shift_mods, true),
+        Some(KeyAction::Bytes(b"\x1b[1;2C".to_vec()))
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowLeft), shift_mods, true),
+        Some(KeyAction::Bytes(b"\x1b[1;2D".to_vec()))
+    );
+}
+
+#[test]
+fn test_custom_keybindings_configuration() {
+    use std::collections::HashMap;
+
+    let mut bindings = HashMap::new();
+    bindings.insert("cmd+left".to_string(), "send_hex:01".to_string());
+    bindings.insert("cmd+right".to_string(), "send_hex:05".to_string());
+    bindings.insert("cmd+shift+[".to_string(), "previous_tab".to_string());
+    bindings.insert("cmd+shift+]".to_string(), "next_tab".to_string());
+    bindings.insert("alt+home".to_string(), "send_bytes:\\x1b[1;3H".to_string());
+
+    let cmd_mods = Modifiers {
+        logo: true,
+        ..Default::default()
+    };
+    let cmd_shift = Modifiers {
+        logo: true,
+        shift: true,
+        ..Default::default()
+    };
+    let alt_mods = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+
+    // 1. Without custom bindings, cmd+left/right switches tabs (default behavior)
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowLeft), cmd_mods, true),
+        Some(KeyAction::PreviousTab)
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowRight), cmd_mods, true),
+        Some(KeyAction::NextTab)
+    );
+
+    // 2. With custom bindings, cmd+left sends Ctrl+A (0x01) and cmd+right sends Ctrl+E (0x05)
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowLeft), None, cmd_mods, true, false, Some(&bindings)),
+        Some(KeyAction::Bytes(vec![0x01]))
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::ArrowRight), None, cmd_mods, true, false, Some(&bindings)),
+        Some(KeyAction::Bytes(vec![0x05]))
+    );
+
+    // 3. Tab switching remapped to Cmd+Shift+[ and Cmd+Shift+]
+    assert_eq!(
+        translate_key_event_full(&Key::Character("[".into()), None, cmd_shift, true, false, Some(&bindings)),
+        Some(KeyAction::PreviousTab)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("]".into()), None, cmd_shift, true, false, Some(&bindings)),
+        Some(KeyAction::NextTab)
+    );
+
+    // 4. Custom escaped bytes
+    assert_eq!(
+        translate_key_event_full(&Key::Named(NamedKey::Home), None, alt_mods, true, false, Some(&bindings)),
+        Some(KeyAction::Bytes(b"\x1b[1;3H".to_vec()))
+    );
+}
+
 
 
 

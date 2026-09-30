@@ -15,7 +15,7 @@ use crate::window::macos::apply_traffic_lights_visibility;
 use crate::window::tabs::calculate_header_layout;
 use crate::workspace::WorkspaceManager;
 use crate::pty::PtySession;
-use crate::term::{TermScreen, translate_key_event, Modifiers, KeyAction};
+use crate::term::{TermScreen, translate_key_event_full, Modifiers, KeyAction};
 use crate::renderer::{TextRenderer, parse_hex_color, resolve_color};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::SelectionType;
@@ -2629,7 +2629,19 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     _ => None,
                 };
 
-                if let Some(action) = translate_key_event(&logical_key, phys_code, mods, self.config.macos.option_as_alt) {
+                let app_cursor = self.active_tab_id()
+                    .and_then(|id| self.tab_sessions.get(&id))
+                    .map(|s| s.screen.is_app_cursor())
+                    .unwrap_or(false);
+
+                if let Some(action) = translate_key_event_full(
+                    &logical_key,
+                    phys_code,
+                    mods,
+                    self.config.macos.option_as_alt,
+                    app_cursor,
+                    Some(&self.config.keybindings),
+                ) {
                     match action {
                         KeyAction::NewTab => {
                             let cwd = self.get_active_tab_cwd();

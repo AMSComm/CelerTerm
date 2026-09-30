@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -8,6 +9,7 @@ pub struct Config {
     pub font: FontConfig,
     pub workspace: WorkspaceConfig,
     pub colors: ColorScheme,
+    pub keybindings: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

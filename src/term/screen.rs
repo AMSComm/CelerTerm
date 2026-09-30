@@ -139,6 +139,14 @@ impl TermScreen {
         self.term.mode().contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
     }
 
+    pub fn is_app_cursor(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::APP_CURSOR)
+    }
+
+    pub fn is_app_keypad(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::APP_KEYPAD)
+    }
+
     pub fn is_bracketed_paste(&self) -> bool {
         self.term.mode().contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
     }

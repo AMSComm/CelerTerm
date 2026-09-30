@@ -64,6 +64,12 @@ option_as_alt = true
 background = "#1a1b26"
 foreground = "#c0caf5"
 cursor = "#7aa2f7"
+
+# [keybindings]
+# "cmd+left" = "send_hex:01"       # Move to beginning of line (Ctrl+A / Home)
+# "cmd+right" = "send_hex:05"      # Move to end of line (Ctrl+E / End)
+# "cmd+shift+[" = "previous_tab"
+# "cmd+shift+]" = "next_tab"
 "##;
             let _ = fs::write(&path, default_toml);
             if let Ok(cfg) = load_from_file(&path) {
