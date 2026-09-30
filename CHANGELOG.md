@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.15] - 2026-09-30
+
+### Changed & Improved
+
+- **Energy & Battery Consumption Optimization**:
+  - Removed aggressive `NSActivityLatencyCritical` macOS process activity assertions, allowing macOS to properly downclock CPU cores and apply timer coalescing when CelerTerm is idling or executing standard shell workloads.
+- **HarfBuzz Shaped Glyph Span Cache (`TextRenderer`)**:
+  - Implemented an LRU cache for shaped text runs (`span_cache`, capacity 4,096 entries) in `TextRenderer`.
+  - Reuses HarfBuzz shaped glyph layouts for identical text spans across frames, significantly reducing redundant CPU OpenType layout time during high-frequency screen updates.
+- **Frame Rate Throttling & Pacing**:
+  - Enforced a 60 FPS (~16.6ms) minimum frame interval using `ControlFlow::WaitUntil` during heavy terminal PTY streaming bursts.
+  - Prevents runaway GPU/CPU rendering loops during large builds or continuous log streaming while preserving responsive interaction.
+- **Window Occlusion Handling**:
+  - Added `is_occluded` state detection via `winit::event::WindowEvent::Occluded`.
+  - Skips full-window rasterization and compositing when CelerTerm is minimized or located on an inactive macOS Space.
+- **Memory & Resource Cleanup**:
+  - Fixed zero-dimension (`0x0`) busy-spin loop during display sleep / lid-close events.
+  - Eliminated redundant `surface.resize(w, h)` executions on every draw cycle.
+  - Removed duplicate `scrollback_cache` in RAM for active terminal sessions.
+  - Removed unused `wgpu = "24"` dependency, reducing release binary footprint.
+
 ## [0.2.14] - 2026-09-30
 
 ### Added & Improved
