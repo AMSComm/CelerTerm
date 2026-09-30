@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.16] - 2026-09-30
+
+### Added & Improved
+
+- **CJK Circled Characters Display Width (2 Grid Cells)**:
+  - Patched `unicode-width` to classify CJK circled numbers and symbols (`①..⑳`, `⓪`, `⓫..⓴`, `㉑..㉟`, `㊱..㊿`, `㋐..㋾`, etc.) as 2 cells wide, matching East Asian terminal conventions and Neovim `ambiwidth = 'double'`.
+  - Box-drawing and border characters remain strictly 1-cell wide to prevent distortion of TUI borders (lazygit, fzf, nvim splits).
+  - Isolated wide character cells during HarfBuzz text shaping so adjacent ASCII characters (such as `'` in `③'`) render in their proper column without overlapping or clipping.
+- **Dynamic Cursor Width & ANSI Cursor Shapes**:
+  - Cursor width dynamically doubles (`cell_w * 2`) when positioned over wide/CJK characters in terminal editors like Neovim.
+  - Added full support for ANSI cursor shapes: `Beam`, `Underline`, `Block`, `HollowBlock`, and `Hidden`.
+- **Focus In/Out Reporting (`DECSET 1004`)**:
+  - Implemented focus reporting escape sequences (`\x1b[I` on focus gained, `\x1b[O` on focus lost) when requested by terminal applications.
+  - Enables Neovim to trigger `FocusGained` autocommands (`checktime`) and automatically reload buffers when files are edited by external applications.
+- **Vietnamese IME Word Navigation**:
+  - Commits active IME preedit compositions immediately when pressing `Option + Left` or `Option + Right` before emitting word navigation sequences, preventing unconfirmed text from drifting.
+- **Tab Bar Layout Stability & Clean Design**:
+  - Removed circular accent dot (`● `) prefix from tab headers for a cleaner visual appearance.
+  - Fixed active tab layout sizing jitter: tab widths remain constant when switching between active and inactive tabs, eliminating jitter.
+  - Maintained clear active tab focus via 2px top accent line, distinct background contrast, and bright text foreground.
+
 ## [0.2.15] - 2026-09-30
 
 ### Changed & Improved
