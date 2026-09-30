@@ -182,6 +182,10 @@ pub struct CelerApp {
     deleted_workspace_ids: Vec<String>,
     last_snapshot_mtime: Option<std::time::SystemTime>,
     last_title_update: Option<std::time::Instant>,
+    last_redraw_time: std::time::Instant,
+    has_pending_redraw: bool,
+    is_occluded: bool,
+    current_surface_size: (u32, u32),
 }
 
 impl Default for CelerApp {
@@ -309,6 +313,10 @@ impl CelerApp {
             deleted_workspace_ids: Vec::new(),
             last_snapshot_mtime: None,
             last_title_update: None,
+            last_redraw_time: std::time::Instant::now(),
+            has_pending_redraw: false,
+            is_occluded: false,
+            current_surface_size: (0, 0),
         };
 
         if let Some(active_ws) = app.workspace_mgr.get_active_workspace() {
@@ -446,6 +454,14 @@ impl CelerApp {
         for line in &scrollback {
             screen.process_bytes(line.as_bytes());
             screen.process_bytes(b"\r\n");
+        }
+
+        // Release duplicate scrollback_cache strings from RAM since it is now live in TermScreen
+        for ws in &mut self.workspace_mgr.workspaces {
+            if let Some(t) = ws.tabs.iter_mut().find(|t| t.id == tab_id) {
+                t.scrollback_cache.clear();
+                t.scrollback_cache.shrink_to_fit();
+            }
         }
 
         let child_pid = pty.child_pid;
@@ -690,6 +706,16 @@ impl CelerApp {
             } else {
                 info!("Saved workspace snapshot to {}", path.display());
                 self.last_snapshot_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            }
+
+            // Free duplicate scrollback strings from RAM for tabs that are active in memory
+            for ws in &mut self.workspace_mgr.workspaces {
+                for tab in &mut ws.tabs {
+                    if self.tab_sessions.contains_key(&tab.id) {
+                        tab.scrollback_cache.clear();
+                        tab.scrollback_cache.shrink_to_fit();
+                    }
+                }
             }
         }
 
@@ -1301,7 +1327,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         && active_id == tab_id
                         && let Some(ref window) = self.window
                     {
-                        window.request_redraw();
+                        if !self.is_occluded {
+                            let now = std::time::Instant::now();
+                            if now.duration_since(self.last_redraw_time) >= std::time::Duration::from_millis(16) {
+                                self.has_pending_redraw = false;
+                                window.request_redraw();
+                            } else {
+                                self.has_pending_redraw = true;
+                            }
+                        }
                     }
                 }
             }
@@ -1380,6 +1414,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 // Spawn sessions for all tabs in the active workspace
                 self.activate_current_workspace_sessions();
 
+                self.current_surface_size = (size.width, size.height);
                 self.surface = Some(surface);
                 self.window = Some(window);
                 self.update_window_and_process_title();
@@ -1421,7 +1456,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Occluded(occluded) => {
+                self.is_occluded = occluded;
                 if !occluded {
+                    self.has_pending_redraw = false;
                     if let Some(ref win) = self.window {
                         win.request_redraw();
                     }
@@ -2898,14 +2935,29 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Resized(new_size) => {
-                if let (Some(w), Some(h)) = (NonZeroU32::new(new_size.width), NonZeroU32::new(new_size.height)) {
-                    if let Some(ref mut surface) = self.surface {
-                        let _ = surface.resize(w, h);
+                if (new_size.width, new_size.height) != self.current_surface_size {
+                    self.current_surface_size = (new_size.width, new_size.height);
+                    if let (Some(w), Some(h)) = (NonZeroU32::new(new_size.width), NonZeroU32::new(new_size.height)) {
+                        if let Some(ref mut surface) = self.surface {
+                            let _ = surface.resize(w, h);
+                        }
                     }
                     self.recalculate_grid(new_size.width as f32, new_size.height as f32);
                 }
             }
             WindowEvent::RedrawRequested => {
+                self.last_redraw_time = std::time::Instant::now();
+                self.has_pending_redraw = false;
+
+                if self.is_occluded {
+                    if let Some(active_id) = self.active_tab_id()
+                        && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                    {
+                        session.screen.dirty = false;
+                    }
+                    return;
+                }
+
                 // Update dynamic tab titles & cwds
                 self.update_tab_titles();
 
@@ -2915,16 +2967,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let height = win_size.height as usize;
 
                     if width == 0 || height == 0 {
+                        if let Some(active_id) = self.active_tab_id()
+                            && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                        {
+                            session.screen.dirty = false;
+                        }
                         return;
                     }
 
-                    if let (Some(w), Some(h)) = (NonZeroU32::new(win_size.width), NonZeroU32::new(win_size.height)) {
-                        if surface.resize(w, h).is_err() {
-                            if let Ok(ctx) = softbuffer::Context::new(window.clone())
-                                && let Ok(mut new_surface) = softbuffer::Surface::new(&ctx, window.clone())
-                            {
-                                let _ = new_surface.resize(w, h);
-                                *surface = new_surface;
+                    if (win_size.width, win_size.height) != self.current_surface_size {
+                        self.current_surface_size = (win_size.width, win_size.height);
+                        if let (Some(w), Some(h)) = (NonZeroU32::new(win_size.width), NonZeroU32::new(win_size.height)) {
+                            if surface.resize(w, h).is_err() {
+                                if let Ok(ctx) = softbuffer::Context::new(window.clone())
+                                    && let Ok(mut new_surface) = softbuffer::Surface::new(&ctx, window.clone())
+                                {
+                                    let _ = new_surface.resize(w, h);
+                                    *surface = new_surface;
+                                }
                             }
                         }
                     }
@@ -4815,7 +4875,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.workspace_modal.is_open {
             if self.reload_workspaces_from_disk() {
                 if let Some(ref window) = self.window {
@@ -4823,12 +4883,34 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
         }
-        if let Some(active_id) = self.active_tab_id()
-            && let Some(session) = self.tab_sessions.get(&active_id)
-            && session.screen.dirty
-            && let Some(ref window) = self.window
-        {
-            window.request_redraw();
+
+        if self.is_occluded {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        let is_dirty = self.active_tab_id()
+            .and_then(|id| self.tab_sessions.get(&id))
+            .map(|s| s.screen.dirty)
+            .unwrap_or(false);
+
+        if is_dirty || self.has_pending_redraw {
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(self.last_redraw_time);
+            let frame_dur = std::time::Duration::from_millis(16);
+
+            if elapsed >= frame_dur {
+                self.has_pending_redraw = false;
+                if let Some(ref window) = self.window {
+                    window.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::Wait);
+            } else {
+                let wait_remaining = frame_dur - elapsed;
+                event_loop.set_control_flow(ControlFlow::WaitUntil(now + wait_remaining));
+            }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {

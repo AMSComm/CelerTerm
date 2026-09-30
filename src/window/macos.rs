@@ -106,8 +106,9 @@ pub fn disable_app_nap() {
                         stringWithUTF8String: reason_bytes.as_ptr() as *const std::ffi::c_char
                     ];
                     // NSActivityUserInitiatedAllowingIdleSystemSleep = 0x00FFFFFFULL & ~0x00100000ULL = 0x00EFFFFFULL
-                    // NSActivityLatencyCritical = 0xFF00000000ULL
-                    let options: u64 = 0x00EFFFFF | 0xFF00000000;
+                    // Note: Avoid NSActivityLatencyCritical (0xFF00000000) as it disables macOS timer
+                    // coalescing and forces CPU into continuous high power state, severely draining battery.
+                    let options: u64 = 0x00EFFFFF;
                     let activity: *mut AnyObject = msg_send![
                         process_info,
                         beginActivityWithOptions: options,

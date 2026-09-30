@@ -1,4 +1,12 @@
-use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
+use std::collections::HashMap;
+use cosmic_text::{Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
+
+#[derive(Clone, Copy, Debug)]
+pub struct CachedGlyph {
+    pub rel_x: i32,
+    pub rel_y: i32,
+    pub cache_key: CacheKey,
+}
 
 pub struct TextRenderer {
     pub font_system: FontSystem,
@@ -9,6 +17,7 @@ pub struct TextRenderer {
     pub cell_width: f32,
     pub cell_height: f32,
     pub ligatures: bool,
+    pub span_cache: HashMap<String, Vec<CachedGlyph>>,
 }
 
 impl TextRenderer {
@@ -81,7 +90,12 @@ impl TextRenderer {
             cell_width,
             cell_height: line_height,
             ligatures,
+            span_cache: HashMap::new(),
         }
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.span_cache.clear();
     }
 
     pub fn shape_line(&mut self, text: &str) -> usize {
@@ -115,26 +129,51 @@ impl TextRenderer {
             return;
         }
 
-        let metrics = Metrics::new(self.font_size, self.line_height);
-        let mut buffer = Buffer::new(&mut self.font_system, metrics);
-        let attrs = Attrs::new().family(Family::Name(&self.font_family));
+        // Fast path: populate shaped glyph cache if span is seen for the first time
+        if !self.span_cache.contains_key(text) {
+            // Keep cache strictly bounded under 4096 entries to conserve memory
+            if self.span_cache.len() >= 4096 {
+                self.span_cache.clear();
+            }
 
-        let shaping = if self.ligatures { Shaping::Advanced } else { Shaping::Basic };
-        buffer.set_text(&mut self.font_system, text, attrs, shaping);
-        buffer.shape_until_scroll(&mut self.font_system, false);
+            let metrics = Metrics::new(self.font_size, self.line_height);
+            let mut buffer = Buffer::new(&mut self.font_system, metrics);
+            let attrs = Attrs::new().family(Family::Name(&self.font_family));
+
+            let shaping = if self.ligatures { Shaping::Advanced } else { Shaping::Basic };
+            buffer.set_text(&mut self.font_system, text, attrs, shaping);
+            buffer.shape_until_scroll(&mut self.font_system, false);
+
+            let mut cached = Vec::new();
+            for run in buffer.layout_runs() {
+                let line_y = run.line_y;
+                for glyph in run.glyphs {
+                    let phys = glyph.physical((0.0, line_y), 1.0);
+                    cached.push(CachedGlyph {
+                        rel_x: phys.x,
+                        rel_y: phys.y,
+                        cache_key: phys.cache_key,
+                    });
+                }
+            }
+            self.span_cache.insert(text.to_string(), cached);
+        }
 
         let r = (color >> 16) & 0xFF;
         let g = (color >> 8) & 0xFF;
         let b = color & 0xFF;
 
-        for run in buffer.layout_runs() {
-            let line_y = start_y + run.line_y;
+        let start_x_i = start_x.round() as i32;
+        let start_y_i = start_y.round() as i32;
 
-            for glyph in run.glyphs {
-                let phys = glyph.physical((start_x, line_y), 1.0);
-                if let Some(image) = self.swash_cache.get_image(&mut self.font_system, phys.cache_key) {
-                    let gx = phys.x + image.placement.left;
-                    let gy = phys.y - image.placement.top;
+        if let Some(cached_glyphs) = self.span_cache.get(text) {
+            for glyph in cached_glyphs {
+                let gx_base = start_x_i + glyph.rel_x;
+                let gy_base = start_y_i + glyph.rel_y;
+
+                if let Some(image) = self.swash_cache.get_image(&mut self.font_system, glyph.cache_key) {
+                    let gx = gx_base + image.placement.left;
+                    let gy = gy_base - image.placement.top;
 
                     let img_w = image.placement.width as usize;
                     let img_h = image.placement.height as usize;
