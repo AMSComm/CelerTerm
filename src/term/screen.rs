@@ -175,6 +175,25 @@ impl TermScreen {
         self.term.mode().contains(alacritty_terminal::term::TermMode::MOUSE_MOTION)
     }
 
+    pub fn is_focus_reporting(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::FOCUS_IN_OUT)
+    }
+
+    pub fn cursor_shape(&self) -> alacritty_terminal::vte::ansi::CursorShape {
+        self.term.cursor_style().shape
+    }
+
+    pub fn is_wide_cell(&self, col: usize, line: usize) -> bool {
+        let grid = self.term.grid();
+        let display_line = Line(line as i32 - grid.display_offset() as i32);
+        if display_line < Line(0) || display_line.0 >= self.size.lines as i32 || col >= self.size.columns {
+            return false;
+        }
+        let cell = &grid[display_line][Column(col)];
+        cell.flags.contains(Flags::WIDE_CHAR)
+            || (cell.c != ' ' && cell.c != '\0' && unicode_width::UnicodeWidthChar::width(cell.c) == Some(2))
+    }
+
     pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
         self.term.selection = Some(Selection::new(ty, point, side));
         self.dirty = true;

@@ -1442,6 +1442,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Focused(is_focused) => {
+                if let Some(active_id) = self.active_tab_id()
+                    && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                {
+                    if session.screen.is_focus_reporting() {
+                        let seq = if is_focused { b"\x1b[I" } else { b"\x1b[O" };
+                        let _ = session.write_all(seq);
+                        let _ = session.flush();
+                    }
+                }
                 if is_focused {
                     if self.reload_workspaces_from_disk() {
                         if let Some(ref win) = self.window {
@@ -1587,16 +1596,20 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
-                // If Option/Alt is pressed, ignore dead-key characters produced by macOS IME
-                if self.modifiers.alt_key() && self.config.macos.option_as_alt {
-                    self.ime_preedit = None;
-                    self.last_preedit = None;
-                    return;
-                }
                 let had_preedit = self.ime_preedit.is_some()
                     || self.last_preedit.as_ref().map(|(_, t)| t.elapsed() < std::time::Duration::from_millis(1000)).unwrap_or(false);
                 let preedit_text = self.ime_preedit.as_ref().map(|(s, _)| s.clone())
                     .or_else(|| self.last_preedit.as_ref().map(|(s, _)| s.clone()));
+
+                // If Option/Alt is pressed, only ignore single dead-key characters produced by macOS IME
+                if self.modifiers.alt_key() && self.config.macos.option_as_alt {
+                    if !had_preedit && matches!(text.as_str(), "´" | "¨" | "ˆ" | "˜" | "`" | "˙" | "˚" | "¯" | "¸" | "˛") {
+                        self.ime_preedit = None;
+                        self.last_preedit = None;
+                        return;
+                    }
+                }
+
                 self.ime_preedit = None;
                 self.last_preedit = None;
 
@@ -2671,6 +2684,27 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     .map(|s| s.screen.is_app_cursor())
                     .unwrap_or(false);
 
+                // If user presses Option+Left or Option+Right to navigate words while an IME preedit
+                // is active (e.g. Vietnamese Telex), commit the preedit text first so it doesn't drift.
+                let is_word_nav = mods.alt && !mods.ctrl && !mods.logo && (
+                    matches!(phys_code, Some(winit::keyboard::KeyCode::ArrowLeft | winit::keyboard::KeyCode::ArrowRight))
+                        || matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft | winit::keyboard::NamedKey::ArrowRight))
+                );
+
+                if is_word_nav {
+                    if let Some((preedit_text, _)) = self.ime_preedit.take() {
+                        if !preedit_text.is_empty() {
+                            if let Some(active_id) = self.active_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                let _ = session.write_all(preedit_text.as_bytes());
+                                let _ = session.flush();
+                            }
+                        }
+                        self.last_preedit = None;
+                    }
+                }
+
                 if let Some(action) = translate_key_event_full(
                     &logical_key,
                     phys_code,
@@ -3029,10 +3063,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         .unwrap_or_default();
 
                     let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
-                        let is_active = t.id == active_tab_id;
-                        let has_custom = t.color.is_some();
-                        let prefix = if is_active || has_custom { "● " } else { "" };
-                        (t.id.clone(), format!("{}{}. {}", prefix, idx + 1, t.title))
+                        (t.id.clone(), format!("{}. {}", idx + 1, t.title))
                     }).collect();
 
                     let active_ws_name = self.workspace_mgr.get_active_workspace()
@@ -3151,7 +3182,6 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let tab_fg = if is_active { 0x00C0CAF5 } else { 0x00787C99 };
 
                             let raw_tab = raw_tabs.get(idx);
-                            let has_custom = raw_tab.and_then(|t| t.color.as_ref()).is_some();
                             let tab_color_u32 = raw_tab
                                 .map(|t| t.effective_color_u32(active_accent))
                                 .unwrap_or(active_accent);
@@ -3183,20 +3213,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
 
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
-                            let mut tab_text_x = rect.x + (6.0 * self.scale_factor);
-
-                            if is_active || has_custom {
-                                self.renderer.draw_text(
-                                    &mut buffer,
-                                    width,
-                                    height,
-                                    tab_text_x,
-                                    tab_text_y,
-                                    "● ",
-                                    tab_color_u32,
-                                );
-                                tab_text_x += 2.0 * self.renderer.cell_width;
-                            }
+                            let tab_text_x = rect.x + (8.0 * self.scale_factor);
 
                             let base_title = format!("{}. {}", idx + 1, raw_tab.map(|t| t.title.as_str()).unwrap_or("Tab"));
                             self.renderer.draw_text(
@@ -3371,7 +3388,25 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     continue;
                                 }
 
-                                // C) Text & ligatures: group consecutive non-box, non-PUA characters with identical fg/bg
+                                // C) Wide / CJK characters - individual cell placement (spans across 2 cells)
+                                let is_wide = active_session.screen.is_wide_cell(col, line_idx);
+                                if is_wide {
+                                    let mut ch_str = String::new();
+                                    ch_str.push(c);
+                                    self.renderer.draw_text(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cell_x,
+                                        y,
+                                        &ch_str,
+                                        fg_u32,
+                                    );
+                                    col += 1;
+                                    continue;
+                                }
+
+                                // D) Text & ligatures: group consecutive non-box, non-PUA, non-wide characters with identical fg/bg
                                 let start_col = col;
                                 let mut span = String::new();
                                 span.push(c);
@@ -3379,7 +3414,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                                 while col < cols {
                                     let (nc, nfg, nbg) = active_session.screen.get_render_cell(col, line_idx);
-                                    if nc == '\0' || nc == ' ' || TextRenderer::is_box_or_block(nc) || TextRenderer::is_nerd_font_or_pua(nc) {
+                                    if nc == '\0' || nc == ' ' || TextRenderer::is_box_or_block(nc) || TextRenderer::is_nerd_font_or_pua(nc) || active_session.screen.is_wide_cell(col, line_idx) {
                                         break;
                                     }
                                     let nfg_u32 = resolve_color(nfg, default_fg, default_bg);
@@ -3478,32 +3513,75 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     // The cursor will appear once confirmed.
                                 } else {
                                     let under_char = active_session.screen.get_cell_char(cursor_col, cursor_row);
+                                    let is_wide = active_session.screen.is_wide_cell(cursor_col, cursor_row);
+                                    let cursor_w = if is_wide { (cell_w * 2.0).round() as usize } else { cell_w.round() as usize };
+                                    let cursor_shape = active_session.screen.cursor_shape();
+                                    let cursor_col_u32 = parse_hex_color(&self.config.colors.cursor, 0x007AA2F7);
 
-                                    // Draw cursor block
-                                    TextRenderer::draw_rect(
-                                        &mut buffer,
-                                        width,
-                                        height,
-                                        cursor_x as usize,
-                                        cursor_y as usize,
-                                        cell_w as usize,
-                                        cell_h as usize,
-                                        0x007AA2F7,
-                                    );
+                                    match cursor_shape {
+                                        alacritty_terminal::vte::ansi::CursorShape::Beam => {
+                                            let beam_w = (2.0 * self.scale_factor).round().max(1.0) as usize;
+                                            TextRenderer::draw_rect(
+                                                &mut buffer,
+                                                width,
+                                                height,
+                                                cursor_x as usize,
+                                                cursor_y as usize,
+                                                beam_w,
+                                                cell_h as usize,
+                                                cursor_col_u32,
+                                            );
+                                        }
+                                        alacritty_terminal::vte::ansi::CursorShape::Underline => {
+                                            let bar_h = (2.0 * self.scale_factor).round().max(1.0) as usize;
+                                            let bar_y = (cursor_y + cell_h - bar_h as f32).max(0.0) as usize;
+                                            TextRenderer::draw_rect(
+                                                &mut buffer,
+                                                width,
+                                                height,
+                                                cursor_x as usize,
+                                                bar_y,
+                                                cursor_w,
+                                                bar_h,
+                                                cursor_col_u32,
+                                            );
+                                        }
+                                        alacritty_terminal::vte::ansi::CursorShape::Block => {
+                                            TextRenderer::draw_rect(
+                                                &mut buffer,
+                                                width,
+                                                height,
+                                                cursor_x as usize,
+                                                cursor_y as usize,
+                                                cursor_w,
+                                                cell_h as usize,
+                                                cursor_col_u32,
+                                            );
 
-                                    // Invert character inside cursor box so it's readable
-                                    if under_char != ' ' && under_char != '\0' {
-                                        let mut char_str = String::new();
-                                        char_str.push(under_char);
-                                        self.renderer.draw_text(
-                                            &mut buffer,
-                                            width,
-                                            height,
-                                            cursor_x,
-                                            cursor_y,
-                                            &char_str,
-                                            0x001A1B26,
-                                        );
+                                            if under_char != ' ' && under_char != '\0' {
+                                                let mut char_str = String::new();
+                                                char_str.push(under_char);
+                                                self.renderer.draw_text(
+                                                    &mut buffer,
+                                                    width,
+                                                    height,
+                                                    cursor_x,
+                                                    cursor_y,
+                                                    &char_str,
+                                                    default_bg,
+                                                );
+                                            }
+                                        }
+                                        alacritty_terminal::vte::ansi::CursorShape::HollowBlock => {
+                                            draw_outline_rect(
+                                                &mut buffer,
+                                                (width, height),
+                                                (cursor_x as usize, cursor_y as usize, cursor_w, cell_h as usize),
+                                                1,
+                                                cursor_col_u32,
+                                            );
+                                        }
+                                        alacritty_terminal::vte::ansi::CursorShape::Hidden => {}
                                     }
                                 }
                             }
