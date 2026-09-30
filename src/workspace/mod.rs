@@ -11,5 +11,6 @@ pub use instances::{
     register_active_instance, unregister_active_instance, is_process_alive,
     focus_instance, find_other_instance_in, find_other_instance_for_workspace,
     cycle_next_instance, cycle_next_instance_in,
+    close_instance, close_all_other_instances, unregister_all_instances,
 };
 

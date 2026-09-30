@@ -91,6 +91,10 @@ pub enum WorkspaceModalMode {
         selected_swatch_idx: usize,
         hex_input: String,
     },
+    ConfirmDelete {
+        target_ws_id: String,
+        target_ws_name: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -782,6 +786,34 @@ impl CelerApp {
         }
     }
 
+    pub fn execute_delete_workspace(&mut self, target_id: &str) {
+        if self.workspace_mgr.workspaces.len() > 1 {
+            let my_pid = std::process::id();
+            if let Some(ws) = self.workspace_mgr.workspaces.iter().find(|w| w.id == target_id) {
+                if crate::workspace::find_other_instance_for_workspace(my_pid, target_id, &ws.name).is_some() {
+                    log::warn!("Cannot delete workspace '{}' because it is active in another window.", ws.name);
+                    return;
+                }
+                for tab in &ws.tabs {
+                    self.tab_sessions.remove(&tab.id);
+                }
+            }
+            self.deleted_workspace_ids.push(target_id.to_string());
+            let _ = self.workspace_mgr.delete_workspace(target_id);
+            self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len().saturating_sub(1));
+            self.activate_current_workspace_sessions();
+            self.save_workspace_state();
+        }
+    }
+
+    pub fn close_all_windows(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.save_workspace_state();
+        let my_pid = std::process::id();
+        crate::workspace::close_all_other_instances(my_pid);
+        crate::workspace::unregister_all_instances();
+        event_loop.exit();
+    }
+
     fn handle_modal_key(&mut self, key: &winit::keyboard::Key, _code: Option<winit::keyboard::KeyCode>) {
         match &mut self.workspace_modal.mode {
             WorkspaceModalMode::Renaming { input } => {
@@ -995,14 +1027,10 @@ impl CelerApp {
                                         if crate::workspace::find_other_instance_for_workspace(my_pid, &target_id, &ws.name).is_some() {
                                             log::warn!("Cannot delete workspace '{}' because it is active in another window.", ws.name);
                                         } else {
-                                            for tab in &ws.tabs {
-                                                self.tab_sessions.remove(&tab.id);
-                                            }
-                                            self.deleted_workspace_ids.push(target_id.clone());
-                                            let _ = self.workspace_mgr.delete_workspace(&target_id);
-                                            self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len().saturating_sub(1));
-                                            self.activate_current_workspace_sessions();
-                                            self.save_workspace_state();
+                                            self.workspace_modal.mode = WorkspaceModalMode::ConfirmDelete {
+                                                target_ws_id: target_id,
+                                                target_ws_name: ws.name.clone(),
+                                            };
                                         }
                                     }
                                 }
@@ -1031,6 +1059,29 @@ impl CelerApp {
                             }
                         }
                     }
+                    _ => {}
+                }
+            }
+            WorkspaceModalMode::ConfirmDelete { target_ws_id, .. } => {
+                let target_id = target_ws_id.clone();
+                match key {
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                        self.execute_delete_workspace(&target_id);
+                        self.workspace_modal.mode = WorkspaceModalMode::List;
+                    }
+                    winit::keyboard::Key::Character(s) => match s.as_str() {
+                        "y" | "Y" => {
+                            self.execute_delete_workspace(&target_id);
+                            self.workspace_modal.mode = WorkspaceModalMode::List;
+                        }
+                        "n" | "N" => {
+                            self.workspace_modal.mode = WorkspaceModalMode::List;
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
@@ -1430,6 +1481,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
         match event {
             WindowEvent::CloseRequested => {
                 self.save_workspace_state();
+                crate::workspace::unregister_active_instance(std::process::id());
                 event_loop.exit();
             }
             WindowEvent::ModifiersChanged(new_mods) => {
@@ -2195,6 +2247,33 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 width: modal_w,
                                 height: modal_h,
                             };
+
+                            if let WorkspaceModalMode::ConfirmDelete { ref target_ws_id, .. } = self.workspace_modal.mode.clone() {
+                                let confirm_buttons = crate::window::calculate_confirm_delete_buttons(
+                                    modal_rect,
+                                    footer_h,
+                                    scale,
+                                    self.renderer.cell_width,
+                                );
+                                for btn in &confirm_buttons {
+                                    if btn.rect.contains(mx, my) {
+                                        match btn.id {
+                                            "confirm_delete" => {
+                                                self.execute_delete_workspace(&target_ws_id);
+                                                self.workspace_modal.mode = WorkspaceModalMode::List;
+                                            }
+                                            "cancel_delete" => {
+                                                self.workspace_modal.mode = WorkspaceModalMode::List;
+                                            }
+                                            _ => {}
+                                        }
+                                        window.request_redraw();
+                                        return;
+                                    }
+                                }
+                                return;
+                            }
+
                             let footer_buttons = crate::window::calculate_modal_buttons(
                                 modal_rect,
                                 footer_h,
@@ -2241,14 +2320,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                                     if crate::workspace::find_other_instance_for_workspace(my_pid, &target_id, &ws.name).is_some() {
                                                         log::warn!("Cannot delete workspace '{}' because it is active in another window.", ws.name);
                                                     } else {
-                                                        for tab in &ws.tabs {
-                                                            self.tab_sessions.remove(&tab.id);
-                                                        }
-                                                        self.deleted_workspace_ids.push(target_id.clone());
-                                                        let _ = self.workspace_mgr.delete_workspace(&target_id);
-                                                        self.workspace_modal.selected_index = self.workspace_modal.selected_index.min(self.workspace_mgr.workspaces.len().saturating_sub(1));
-                                                        self.activate_current_workspace_sessions();
-                                                        self.save_workspace_state();
+                                                        self.workspace_modal.mode = WorkspaceModalMode::ConfirmDelete {
+                                                            target_ws_id: target_id,
+                                                            target_ws_name: ws.name.clone(),
+                                                        };
                                                     }
                                                 }
                                             }
@@ -2301,7 +2376,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let menu_w = (220.0 * scale).round();
                         let item_h = (28.0 * scale).round();
                         let menu_pad = (6.0 * scale).round();
-                        let menu_h = (5.0 * item_h) + (menu_pad * 2.0);
+                        let menu_h = (6.0 * item_h) + (menu_pad * 2.0);
                         let menu_btn = header.menu_button_rect;
                         let menu_x = (menu_btn.x + menu_btn.width - menu_w).max(8.0 * scale);
                         let menu_y = header.height + (2.0 * scale);
@@ -2325,9 +2400,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     self.reload_config();
                                 }
                                 3 => {
-                                    crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
+                                    self.close_all_windows(event_loop);
+                                    return;
                                 }
                                 4 => {
+                                    crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
+                                }
+                                5 => {
                                     self.update_modal.is_open = true;
                                     self.update_modal.state = crate::update::UpdateState::UpToDate {
                                         current_version: crate::update::CURRENT_VERSION.to_string(),
@@ -2355,6 +2434,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 if button == MouseButton::Middle || mx >= rect.x + rect.width - close_area_w {
                                     if self.tab_sessions.len() <= 1 {
                                         self.save_workspace_state();
+                                        crate::workspace::unregister_active_instance(std::process::id());
                                         event_loop.exit();
                                         return;
                                     }
@@ -2753,6 +2833,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             self.save_workspace_state();
                             crate::workspace::unregister_active_instance(std::process::id());
                             event_loop.exit();
+                        }
+                        KeyAction::CloseAllWindows => {
+                            self.close_all_windows(event_loop);
                         }
                         KeyAction::NewWorkspace => {
                             let ws_count = self.workspace_mgr.workspaces.len() + 1;
@@ -3937,7 +4020,6 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 }
                             }
 
-                            // Inline text editing (Renaming / Creating)
                             if is_editing {
                                 let edit_y = list_top + list_h + (4.0 * scale);
                                 let (prompt, input_str) = match &self.workspace_modal.mode {
@@ -3989,6 +4071,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     &input_text,
                                     0x007AA2F7,
                                 );
+                            } else if let WorkspaceModalMode::ConfirmDelete { ref target_ws_name, .. } = self.workspace_modal.mode {
+                                let edit_y = list_top + list_h + (4.0 * scale);
+                                let prompt = format!("Delete workspace '{}'? (Press 'y' to Confirm, 'n' / Esc to Cancel)", target_ws_name);
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    modal_x + (16.0 * scale),
+                                    edit_y,
+                                    &prompt,
+                                    0x00F7768E,
+                                );
                             }
 
                             // Footer toolbar
@@ -4021,12 +4115,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 width: modal_w,
                                 height: modal_h,
                             };
-                            let footer_buttons = crate::window::calculate_modal_buttons(
-                                modal_rect,
-                                footer_h,
-                                scale,
-                                self.renderer.cell_width,
-                            );
+                            let footer_buttons: Vec<crate::window::ModalButton> = if matches!(self.workspace_modal.mode, WorkspaceModalMode::ConfirmDelete { .. }) {
+                                crate::window::calculate_confirm_delete_buttons(
+                                    modal_rect,
+                                    footer_h,
+                                    scale,
+                                    self.renderer.cell_width,
+                                ).to_vec()
+                            } else {
+                                crate::window::calculate_modal_buttons(
+                                    modal_rect,
+                                    footer_h,
+                                    scale,
+                                    self.renderer.cell_width,
+                                ).to_vec()
+                            };
 
                             let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
                             for btn in &footer_buttons {
@@ -4577,7 +4680,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let menu_btn = header.menu_button_rect;
                         let menu_x = (menu_btn.x + menu_btn.width - menu_w).max(8.0 * scale);
                         let menu_y = header.height + (2.0 * scale);
-                        let menu_h = (5.0 * item_h) + (menu_pad * 2.0);
+                        let menu_h = (6.0 * item_h) + (menu_pad * 2.0);
 
                         // Menu background (#1F2335)
                         TextRenderer::draw_rect(
@@ -4599,16 +4702,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             0x003B4261,
                         );
 
-                        let (sc_u, sc_o, sc_r) = if cfg!(target_os = "macos") {
-                            ("⌘⇧U", "⌘⇧O", "⌘⇧R")
+                        let (sc_u, sc_o, sc_r, sc_q_all) = if cfg!(target_os = "macos") {
+                            ("⌘⇧U", "⌘⇧O", "⌘⇧R", "⌘⇧Q")
                         } else {
-                            ("Ctrl+Shift+U", "Ctrl+Shift+O", "Ctrl+Shift+R")
+                            ("Ctrl+Shift+U", "Ctrl+Shift+O", "Ctrl+Shift+R", "Ctrl+Shift+Q")
                         };
 
-                        let menu_items: [(&str, &str); 5] = [
+                        let menu_items: [(&str, &str); 6] = [
                             ("Check for Updates...", sc_u),
                             ("Workspaces", sc_o),
                             ("Reload Config", sc_r),
+                            ("Close All Windows", sc_q_all),
                             ("GitHub Repository", ""),
                             ("About CelerTerm", ""),
                         ];
@@ -4993,12 +5097,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
     }
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.save_workspace_state();
+        crate::workspace::unregister_active_instance(std::process::id());
     }
 }
 
 impl Drop for CelerApp {
     fn drop(&mut self) {
         self.save_workspace_state();
+        crate::workspace::unregister_active_instance(std::process::id());
     }
 }
 

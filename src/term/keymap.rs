@@ -21,6 +21,7 @@ pub enum KeyAction {
     NewTab,
     CloseTab,
     Quit,
+    CloseAllWindows,
     NewWorkspace,
     PreviousWorkspace,
     NextWorkspace,
@@ -86,6 +87,7 @@ pub fn translate_key_event_full(
                     "T" | "t" | "K" | "k" => return Some(KeyAction::CustomizeTabColor),
                     "R" | "r" => return Some(KeyAction::ReloadConfig),
                     "U" | "u" => return Some(KeyAction::CheckForUpdates),
+                    "Q" | "q" => return Some(KeyAction::CloseAllWindows),
                     _ => {}
                 }
             }
@@ -124,6 +126,16 @@ pub fn translate_key_event_full(
         }
     }
 
+    // 0.02 Option + Command combinations (e.g. Option+Cmd+W or Option+Cmd+Q to close all windows)
+    if mods.logo && mods.alt && !mods.ctrl {
+        if let Key::Character(ch) = key {
+            match ch.as_str() {
+                "w" | "W" | "q" | "Q" => return Some(KeyAction::CloseAllWindows),
+                _ => {}
+            }
+        }
+    }
+
     // 0.05 Dedicated Escape key handling (handles NamedKey, KeyCode::Escape, and raw ESC character \x1b)
     let is_escape = matches!(key, Key::Named(NamedKey::Escape))
         || matches!(key, Key::Character(s) if s == "\x1b")
@@ -148,6 +160,7 @@ pub fn translate_key_event_full(
                 "U" | "u" => return Some(KeyAction::CheckForUpdates),
                 "C" | "c" => return Some(KeyAction::Copy),
                 "V" | "v" => return Some(KeyAction::Paste),
+                "Q" | "q" => return Some(KeyAction::CloseAllWindows),
                 _ => {}
             }
         }
@@ -519,6 +532,8 @@ pub fn parse_action_string(val: &str, app_cursor: bool) -> Option<KeyAction> {
         "reset_font_size" => Some(KeyAction::ResetFontSize),
         "move_tab_left" => Some(KeyAction::MoveTabLeft),
         "move_tab_right" => Some(KeyAction::MoveTabRight),
+        "close_all_windows" | "quit_all" | "close_all" => Some(KeyAction::CloseAllWindows),
+        "quit" => Some(KeyAction::Quit),
         "home" | "beginning_of_line" => {
             Some(KeyAction::Bytes(if app_cursor { b"\x1bOH".to_vec() } else { b"\x1b[H".to_vec() }))
         }

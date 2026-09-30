@@ -24,7 +24,18 @@ pub fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
         if let Some(proc_pid) = rustix::process::Pid::from_raw(pid as i32) {
-            rustix::process::test_kill_process(proc_pid).is_ok()
+            if rustix::process::test_kill_process(proc_pid).is_err() {
+                return false;
+            }
+            if pid == std::process::id() {
+                return true;
+            }
+            if let Some(name) = crate::pty::get_process_name(pid) {
+                let lower = name.to_lowercase();
+                lower.contains("celerterm")
+            } else {
+                true
+            }
         } else {
             false
         }
@@ -41,7 +52,12 @@ pub fn load_instances_from_file(path: &Path) -> Vec<ActiveInstance> {
     }
     if let Ok(content) = fs::read_to_string(path) {
         if let Ok(instances) = serde_json::from_str::<Vec<ActiveInstance>>(&content) {
-            return instances.into_iter().filter(|inst| is_process_alive(inst.pid)).collect();
+            let original_count = instances.len();
+            let alive: Vec<ActiveInstance> = instances.into_iter().filter(|inst| is_process_alive(inst.pid)).collect();
+            if alive.len() < original_count {
+                let _ = save_instances_to_file(&alive, path);
+            }
+            return alive;
         }
     }
     Vec::new()
@@ -87,6 +103,52 @@ pub fn unregister_active_instance(pid: u32) {
         let mut instances = load_instances_from_file(&path);
         instances.retain(|i| i.pid != pid);
         let _ = save_instances_to_file(&instances, &path);
+    }
+}
+
+pub fn unregister_all_instances() {
+    if let Some(path) = get_default_instances_path() {
+        let _ = save_instances_to_file(&[], &path);
+    }
+}
+
+pub fn close_instance(pid: u32) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::NSRunningApplication;
+        let success = unsafe {
+            if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32) {
+                app.terminate()
+            } else {
+                false
+            }
+        };
+        if success {
+            return true;
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        if let Some(proc_pid) = rustix::process::Pid::from_raw(pid as i32) {
+            return rustix::process::kill_process(proc_pid, rustix::process::Signal::Term).is_ok();
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
+
+    false
+}
+
+pub fn close_all_other_instances(my_pid: u32) {
+    let instances = get_all_active_instances();
+    for inst in instances {
+        if inst.pid != my_pid {
+            close_instance(inst.pid);
+        }
     }
 }
 
@@ -258,6 +320,59 @@ mod tests {
         assert_eq!(cycle_next_instance_in(&instances[..1], 1001), None);
         // Empty instances returns None
         assert_eq!(cycle_next_instance_in(&[], 1001), None);
+    }
+
+    #[test]
+    fn test_process_alive_check() {
+        let current_pid = std::process::id();
+        assert!(is_process_alive(current_pid));
+
+        // Unlikely / dead PID
+        let dead_pid = 9_999_999;
+        assert!(!is_process_alive(dead_pid));
+    }
+
+    #[test]
+    fn test_load_and_prune_dead_instances() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create tempdir");
+        let path = temp_dir.path().join("active_instances.json");
+
+        let current_pid = std::process::id();
+        let dead_pid = 9_999_999;
+
+        let instances = vec![
+            ActiveInstance {
+                pid: current_pid,
+                workspace_name: "Alive WS".to_string(),
+                workspace_id: "alive-1".to_string(),
+                updated_at: 1000,
+            },
+            ActiveInstance {
+                pid: dead_pid,
+                workspace_name: "Dead WS".to_string(),
+                workspace_id: "dead-2".to_string(),
+                updated_at: 500,
+            },
+        ];
+
+        save_instances_to_file(&instances, &path).expect("Failed to save instances");
+        assert!(path.exists());
+
+        // Loading should filter out the dead PID and prune the file
+        let loaded = load_instances_from_file(&path);
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].pid, current_pid);
+
+        // Re-read raw content from file to verify it was pruned on disk
+        let disk_content = fs::read_to_string(&path).expect("Read pruned file");
+        let pruned: Vec<ActiveInstance> = serde_json::from_str(&disk_content).expect("Parse pruned json");
+        assert_eq!(pruned.len(), 1);
+        assert_eq!(pruned[0].pid, current_pid);
+    }
+
+    #[test]
+    fn test_close_instance_safe_on_nonexistent() {
+        assert!(!close_instance(9_999_999));
     }
 }
 

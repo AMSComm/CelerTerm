@@ -1,4 +1,6 @@
-use celerterm::window::{calculate_header_layout, calculate_modal_buttons, Rect};
+use celerterm::window::{
+    calculate_confirm_delete_buttons, calculate_header_layout, calculate_modal_buttons, Rect,
+};
 
 #[test]
 fn test_header_layout_disabled() {
@@ -105,6 +107,43 @@ fn test_modal_buttons_fit_within_modal_no_overflow() {
             buttons[i + 1].id
         );
     }
+}
+
+#[test]
+fn test_calculate_confirm_delete_buttons() {
+    let modal = Rect {
+        x: 100.0,
+        y: 80.0,
+        width: 580.0,
+        height: 320.0,
+    };
+    let buttons = calculate_confirm_delete_buttons(modal, 42.0, 1.0, 8.5);
+
+    assert_eq!(buttons.len(), 2);
+    assert_eq!(buttons[0].id, "confirm_delete");
+    assert_eq!(buttons[0].label, "[y] Confirm Delete");
+    assert_eq!(buttons[0].color, 0x00F7768E);
+
+    assert_eq!(buttons[1].id, "cancel_delete");
+    assert_eq!(buttons[1].label, "[Esc / n] Cancel");
+    assert_eq!(buttons[1].color, 0x007AA2F7);
+
+    for btn in &buttons {
+        assert!(btn.rect.x >= modal.x);
+        assert!(
+            btn.rect.x + btn.rect.width <= modal.x + modal.width,
+            "Button {} exceeded modal width",
+            btn.id
+        );
+        assert!(btn.rect.y >= modal.y);
+        assert!(
+            btn.rect.y + btn.rect.height <= modal.y + modal.height,
+            "Button {} exceeded modal height",
+            btn.id
+        );
+    }
+
+    assert!(buttons[0].rect.x + buttons[0].rect.width <= buttons[1].rect.x);
 }
 
 #[test]

@@ -1092,6 +1092,74 @@ fn test_custom_keybindings_configuration() {
     );
 }
 
+#[test]
+fn test_close_all_windows_shortcuts() {
+    let cmd_shift = Modifiers {
+        logo: true,
+        shift: true,
+        ..Default::default()
+    };
+    let opt_cmd = Modifiers {
+        logo: true,
+        alt: true,
+        ..Default::default()
+    };
+    let ctrl_shift = Modifiers {
+        ctrl: true,
+        shift: true,
+        ..Default::default()
+    };
+
+    // 1. Cmd+Shift+Q -> CloseAllWindows
+    assert_eq!(
+        translate_key(&Key::Character("q".into()), cmd_shift, true),
+        Some(KeyAction::CloseAllWindows)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("Q".into()), cmd_shift, true),
+        Some(KeyAction::CloseAllWindows)
+    );
+
+    // 2. Option+Cmd+W and Option+Cmd+Q -> CloseAllWindows
+    assert_eq!(
+        translate_key(&Key::Character("w".into()), opt_cmd, true),
+        Some(KeyAction::CloseAllWindows)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("q".into()), opt_cmd, true),
+        Some(KeyAction::CloseAllWindows)
+    );
+
+    // 3. Ctrl+Shift+Q -> CloseAllWindows
+    assert_eq!(
+        translate_key(&Key::Character("q".into()), ctrl_shift, true),
+        Some(KeyAction::CloseAllWindows)
+    );
+
+    // 4. Custom keybindings mapping close_all_windows and quit_all
+    let mut bindings = std::collections::HashMap::new();
+    bindings.insert("ctrl+q".to_string(), "close_all_windows".to_string());
+    bindings.insert("alt+q".to_string(), "quit_all".to_string());
+
+    let ctrl_mods = Modifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let alt_mods = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        translate_key_event_full(&Key::Character("q".into()), None, ctrl_mods, true, false, Some(&bindings)),
+        Some(KeyAction::CloseAllWindows)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("q".into()), None, alt_mods, true, false, Some(&bindings)),
+        Some(KeyAction::CloseAllWindows)
+    );
+}
+
 
 
 
