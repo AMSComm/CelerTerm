@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.17] - 2026-09-30
+
+### Added & Improved
+
+- **Close All Windows / Workspaces**:
+  - Added `CloseAllWindows` action mapped to `Cmd+Shift+Q` (macOS), `Option+Cmd+W` / `Option+Cmd+Q` (macOS), and `Ctrl+Shift+Q` (Linux).
+  - Added configurable keybinding action support for `"close_all_windows"` and `"quit_all"` in `config.toml`.
+  - Added "Close All Windows" menu item (`⌘⇧Q` / `Ctrl+Shift+Q`) to the header hamburger dropdown menu.
+  - Gracefully terminates all other running CelerTerm window instances, clears active instance registry, and saves state before exiting.
+- **Workspace Deletion Confirmation Modal**:
+  - Implemented interactive confirmation step before deleting a workspace in the workspace manager modal (`⌘⇧O` / `Ctrl+Shift+O`).
+  - Displays red warning prompt with target workspace name and footer button chips: `[y] Confirm Delete` and `[Esc / n] Cancel`.
+  - Supports keyboard shortcuts (`y` / `Enter` to confirm, `n` / `Esc` to cancel) and direct mouse clicks on button chips.
+- **App Icon Refinement**:
+  - Cleaned up application icon by removing macOS window control dots (red/yellow/green) from the top-left corner for a cleaner and more focused terminal design.
+
+### Fixed
+
+- **Phantom Workspace Creation on App Restart**:
+  - Fixed an issue where closing and reopening windows caused unwanted automatic creation of new workspaces.
+  - Verified process name matches `celerterm` in `is_process_alive()` to prevent false positives from recycled OS PIDs.
+  - Enhanced active instance loader to auto-prune stale instances from disk immediately.
+  - Guaranteed unregistration of process instances on window close, last tab close, app exit, and drop.
+
 ## [0.2.16] - 2026-09-30
 
 ### Added & Improved
