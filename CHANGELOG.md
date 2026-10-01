@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20] - 2026-10-01
+
+### Fixed
+
+- **TUI Cursor Visibility and Neovim Lazygit Flicker**:
+  - Fixed an issue where the terminal cursor flickered and remained visible in full-screen TUI applications (such as `lazygit` inside Neovim terminal buffers during fetching/pulling animations).
+  - Terminal screen now strictly respects `TermMode::SHOW_CURSOR` (DECTCEM `\x1b[?25l` / `\x1b[?25h`), returning `CursorShape::Hidden` when an application requests cursor hiding.
+
+### Added & Improved
+
+- **Persistent macOS TCC Permissions Across Auto-Updates**:
+  - Added automatic local certificate re-signing to the macOS restart update script. If a local `CelerTerm-Local` code-signing identity exists in the Keychain, the updater automatically re-signs the newly staged `CelerTerm.app` before restart.
+  - Preserves macOS Full Disk Access and Privacy permissions across versions without requiring users to re-grant permissions in System Settings after every update.
+  - Added `scripts/setup-macos-permissions.sh` for one-click setup of the persistent code-signing identity on macOS.
+
 ## [0.2.19] - 2026-10-01
 
 ### Added & Improved
