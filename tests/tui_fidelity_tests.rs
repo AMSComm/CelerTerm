@@ -154,3 +154,20 @@ fn test_sgr_mouse_formatting_and_drag_encoding() {
     );
 }
 
+#[test]
+fn test_cursor_visibility_and_shape_mode() {
+    let mut screen = TermScreen::new(80, 24);
+    assert_ne!(screen.cursor_shape(), alacritty_terminal::vte::ansi::CursorShape::Hidden);
+    assert!(screen.is_show_cursor());
+
+    // Hide cursor: \x1b[?25l (DECTCEM)
+    screen.process_bytes(b"\x1b[?25l");
+    assert!(!screen.is_show_cursor());
+    assert_eq!(screen.cursor_shape(), alacritty_terminal::vte::ansi::CursorShape::Hidden);
+
+    // Show cursor again: \x1b[?25h
+    screen.process_bytes(b"\x1b[?25h");
+    assert!(screen.is_show_cursor());
+    assert_ne!(screen.cursor_shape(), alacritty_terminal::vte::ansi::CursorShape::Hidden);
+}
+

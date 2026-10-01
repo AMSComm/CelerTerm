@@ -179,8 +179,16 @@ impl TermScreen {
         self.term.mode().contains(alacritty_terminal::term::TermMode::FOCUS_IN_OUT)
     }
 
+    pub fn is_show_cursor(&self) -> bool {
+        self.term.mode().contains(alacritty_terminal::term::TermMode::SHOW_CURSOR)
+    }
+
     pub fn cursor_shape(&self) -> alacritty_terminal::vte::ansi::CursorShape {
-        self.term.cursor_style().shape
+        if !self.term.mode().contains(alacritty_terminal::term::TermMode::SHOW_CURSOR) {
+            alacritty_terminal::vte::ansi::CursorShape::Hidden
+        } else {
+            self.term.cursor_style().shape
+        }
     }
 
     pub fn is_wide_cell(&self, col: usize, line: usize) -> bool {
