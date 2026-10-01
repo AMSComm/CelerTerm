@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.18] - 2026-10-01
+
+### Fixed
+
+- **Programming Font Ligatures in Terminal and Neovim**:
+  - Fixed an issue where OpenType programming ligatures (`->`, `!=`, `=>`, `==`, `===`, `!==`, `/*`, `*/`, `<=`, `>=`, `::`, etc.) were not rendering in the shell or inside Neovim.
+  - Resolved paragraph-level UAX #14 line-breaking word fragmentation in `cosmic-text` by introducing direct OpenType shaping via `rustybuzz` for monospace code spans.
+  - Guaranteed seamless fallback to multi-font fallback rendering for CJK (Japanese, Chinese, Korean), boxed symbols, and emoji.
+
 ## [0.2.17] - 2026-09-30
 
 ### Added & Improved
