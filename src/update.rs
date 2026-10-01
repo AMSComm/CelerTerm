@@ -386,6 +386,10 @@ pub fn generate_restart_script(
              {kill_others}\
              rm -rf \"{target}\"; \
              mv \"{staged}\" \"{target}\"; \
+             xattr -cr \"{target}\" 2>/dev/null || true; \
+             if security find-identity -p codesigning -v 2>/dev/null | grep -q 'CelerTerm-Local'; then \
+                 codesign --force --deep -s 'CelerTerm-Local' \"{target}\" 2>/dev/null || true; \
+             fi; \
              {relaunch}",
             pid = pid,
             kill_others = kill_others_cmds,
