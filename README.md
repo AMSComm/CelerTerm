@@ -119,6 +119,16 @@ Download official pre-built packages from [GitHub Releases](https://github.com/A
 
 > 🔄 **In-App Update Checker:** You can check for new releases and view full changelogs directly inside CelerTerm via the top-right `☰` App Menu or `Cmd+Shift+U` / `Ctrl+Shift+U`.
 
+### 🍎 Persistent macOS Permissions (Full Disk Access)
+
+To ensure macOS retains Full Disk Access across auto-updates without prompting for permissions again, run this one-time setup script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AMSComm/CelerTerm/main/scripts/setup-macos-permissions.sh | bash
+```
+
+This creates a local code-signing identity (`CelerTerm-Local`) in your Keychain. CelerTerm's auto-updater will automatically re-sign new versions with this identity on restart, keeping Full Disk Access intact across all future updates.
+
 ---
 
 ## 🛠️ Building from Source
