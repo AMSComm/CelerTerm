@@ -54,6 +54,11 @@ fn test_box_and_block_char_detection() {
     assert!(TextRenderer::is_box_or_block('╭'));
     assert!(TextRenderer::is_box_or_block('╯'));
     assert!(TextRenderer::is_box_or_block('┼'));
+    assert!(TextRenderer::is_box_or_block('╼'));
+    assert!(TextRenderer::is_box_or_block('╾'));
+    assert!(TextRenderer::is_box_or_block('┝'));
+    assert!(TextRenderer::is_box_or_block('┥'));
+    assert!(TextRenderer::is_box_or_block('┿'));
 
     // Block elements
     assert!(TextRenderer::is_box_or_block('█'));
@@ -94,6 +99,13 @@ fn test_draw_box_and_block_char() {
     // Draw full block
     renderer.draw_box_or_block_char(&mut buffer, 100, 100, 30.0, 30.0, '█', 0x0000FF00);
     assert!(buffer.contains(&0x0000FF00));
+
+    // Draw markdown table alignment and hybrid box characters
+    for ch in ['╼', '╾', '┝', '┥', '┿', '┠', '┨', '┯', '┷', '┰', '┸', '╂', '╁', '╀'] {
+        let mut test_buf = vec![0u32; 100 * 100];
+        renderer.draw_box_or_block_char(&mut test_buf, 100, 100, 20.0, 20.0, ch, 0x00AABBCC);
+        assert!(test_buf.contains(&0x00AABBCC), "Character {ch} should be drawn to buffer");
+    }
 }
 
 #[test]
