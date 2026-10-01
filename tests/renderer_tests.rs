@@ -2,7 +2,7 @@ use celerterm::renderer::TextRenderer;
 
 #[test]
 fn test_font_shaping_and_ligature_processing() {
-    let mut renderer = TextRenderer::new("Firple", 13.0, 1.2);
+    let mut renderer = TextRenderer::new("Firple VN", 13.0, 1.2);
     
     // Normal ASCII text
     let glyphs_ascii = renderer.shape_line("hello world");
@@ -11,6 +11,25 @@ fn test_font_shaping_and_ligature_processing() {
     // Ligature sequences: "->", "=>", "!=", "==="
     let glyphs_ligature = renderer.shape_line("fn test() -> bool { a != b && x === y }");
     assert!(glyphs_ligature > 0);
+
+    // Verify draw_text populates span_cache with OpenType contextual ligature glyphs
+    let mut buffer = vec![0u32; 100 * 50];
+    renderer.draw_text(&mut buffer, 100, 50, 0.0, 0.0, "->", 0x00FFFFFF);
+    let cached_arrow = renderer.span_cache.get("->").expect("should cache ->");
+    assert_eq!(cached_arrow.len(), 2);
+    // In Firple / Firple VN, ligature glyph for -> is not [17, 34] (hyphen, greater)
+    if renderer.font_family == "Firple VN" || renderer.font_family == "Firple" {
+        assert_ne!(cached_arrow[0].cache_key.glyph_id, 17, "arrow hyphen should be replaced by ligature glyph");
+        assert_ne!(cached_arrow[1].cache_key.glyph_id, 34, "arrow head should be replaced by ligature glyph");
+    }
+
+    renderer.draw_text(&mut buffer, 100, 50, 0.0, 0.0, "!=", 0x00FFFFFF);
+    let cached_neq = renderer.span_cache.get("!=").expect("should cache !=");
+    assert_eq!(cached_neq.len(), 2);
+    if renderer.font_family == "Firple VN" || renderer.font_family == "Firple" {
+        assert_ne!(cached_neq[0].cache_key.glyph_id, 5, "exclamation should be replaced by ligature glyph");
+        assert_ne!(cached_neq[1].cache_key.glyph_id, 33, "equal should be replaced by ligature glyph");
+    }
 }
 
 #[test]

@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use cosmic_text::{Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
+use cosmic_text::{
+    fontdb, rustybuzz, Attrs, Buffer, CacheKey, CacheKeyFlags, Family, FontSystem, Metrics, Shaping,
+    SwashCache, SwashContent,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct CachedGlyph {
@@ -12,6 +15,8 @@ pub struct TextRenderer {
     pub font_system: FontSystem,
     pub swash_cache: SwashCache,
     pub font_family: String,
+    pub primary_font_id: Option<fontdb::ID>,
+    pub baseline_y: f32,
     pub font_size: f32,
     pub line_height: f32,
     pub cell_width: f32,
@@ -62,10 +67,16 @@ impl TextRenderer {
             found.unwrap_or_else(|| family.to_string())
         };
 
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name(&effective_family)],
+            ..Default::default()
+        };
+        let primary_font_id = font_system.db().query(&query);
+
         let swash_cache = SwashCache::new();
         let line_height = (size * line_height_factor).round();
 
-        // Calculate monospace cell width by measuring a sample character 'M'
+        // Calculate monospace cell width and baseline by measuring sample character 'M'
         let metrics = Metrics::new(size, line_height);
         let mut buffer = Buffer::new(&mut font_system, metrics);
         let attrs = Attrs::new().family(Family::Name(&effective_family));
@@ -73,7 +84,9 @@ impl TextRenderer {
         buffer.shape_until_scroll(&mut font_system, false);
 
         let mut cell_width = (size * 0.6).round().max(7.0);
+        let mut baseline_y = size;
         for run in buffer.layout_runs() {
+            baseline_y = run.line_y;
             if let Some(glyph) = run.glyphs.first()
                 && glyph.w > 0.0
             {
@@ -85,6 +98,8 @@ impl TextRenderer {
             font_system,
             swash_cache,
             font_family: effective_family,
+            primary_font_id,
+            baseline_y,
             font_size: size,
             line_height,
             cell_width,
@@ -99,6 +114,22 @@ impl TextRenderer {
     }
 
     pub fn shape_line(&mut self, text: &str) -> usize {
+        if self.ligatures {
+            if let Some(font_id) = self.primary_font_id {
+                if let Some(font) = self.font_system.get_font(font_id) {
+                    let mut ub = rustybuzz::UnicodeBuffer::new();
+                    ub.push_str(text);
+                    ub.guess_segment_properties();
+
+                    let glyph_buffer = rustybuzz::shape(font.rustybuzz(), &[], ub);
+                    let infos = glyph_buffer.glyph_infos();
+                    if !infos.is_empty() && infos.iter().all(|i| i.glyph_id != 0) {
+                        return infos.len();
+                    }
+                }
+            }
+        }
+
         let metrics = Metrics::new(self.font_size, self.line_height);
         let mut buffer = Buffer::new(&mut self.font_system, metrics);
         let attrs = Attrs::new().family(Family::Name(&self.font_family));
@@ -136,26 +167,78 @@ impl TextRenderer {
                 self.span_cache.clear();
             }
 
-            let metrics = Metrics::new(self.font_size, self.line_height);
-            let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            let attrs = Attrs::new().family(Family::Name(&self.font_family));
+            let mut cached = None;
 
-            let shaping = if self.ligatures { Shaping::Advanced } else { Shaping::Basic };
-            buffer.set_text(&mut self.font_system, text, attrs, shaping);
-            buffer.shape_until_scroll(&mut self.font_system, false);
+            // When ligatures are enabled, shape as a unified OpenType run using rustybuzz directly
+            // to prevent UAX #14 line-breaking from splitting punctuation ligatures (e.g. "->", "!=", "/*")
+            if self.ligatures {
+                if let Some(font_id) = self.primary_font_id {
+                    if let Some(font) = self.font_system.get_font(font_id) {
+                        let mut ub = rustybuzz::UnicodeBuffer::new();
+                        ub.push_str(text);
+                        ub.guess_segment_properties();
 
-            let mut cached = Vec::new();
-            for run in buffer.layout_runs() {
-                let line_y = run.line_y;
-                for glyph in run.glyphs {
-                    let phys = glyph.physical((0.0, line_y), 1.0);
-                    cached.push(CachedGlyph {
-                        rel_x: phys.x,
-                        rel_y: phys.y,
-                        cache_key: phys.cache_key,
-                    });
+                        let glyph_buffer = rustybuzz::shape(font.rustybuzz(), &[], ub);
+                        let infos = glyph_buffer.glyph_infos();
+                        let positions = glyph_buffer.glyph_positions();
+
+                        // Only use direct shaping if all glyphs are present in the primary font
+                        if !infos.is_empty() && infos.iter().all(|i| i.glyph_id != 0) {
+                            let font_scale = font.rustybuzz().units_per_em() as f32;
+                            let mut span_glyphs = Vec::with_capacity(infos.len());
+                            let mut cursor_x = 0.0f32;
+
+                            for (info, pos) in infos.iter().zip(positions.iter()) {
+                                let x_advance = (pos.x_advance as f32 / font_scale) * self.font_size;
+                                let x_offset = (pos.x_offset as f32 / font_scale) * self.font_size;
+                                let y_offset = (pos.y_offset as f32 / font_scale) * self.font_size;
+
+                                let (cache_key, px, py) = CacheKey::new(
+                                    font_id,
+                                    info.glyph_id as u16,
+                                    self.font_size,
+                                    (cursor_x + x_offset, self.baseline_y - y_offset),
+                                    CacheKeyFlags::empty(),
+                                );
+
+                                span_glyphs.push(CachedGlyph {
+                                    rel_x: px,
+                                    rel_y: py,
+                                    cache_key,
+                                });
+
+                                cursor_x += x_advance;
+                            }
+                            cached = Some(span_glyphs);
+                        }
+                    }
                 }
             }
+
+            let cached = cached.unwrap_or_else(|| {
+                let metrics = Metrics::new(self.font_size, self.line_height);
+                let mut buffer = Buffer::new(&mut self.font_system, metrics);
+                let attrs = Attrs::new().family(Family::Name(&self.font_family));
+
+                let shaping = if self.ligatures { Shaping::Advanced } else { Shaping::Basic };
+                buffer.set_text(&mut self.font_system, text, attrs, shaping);
+                buffer.shape_until_scroll(&mut self.font_system, false);
+
+                let mut list = Vec::new();
+                for run in buffer.layout_runs() {
+                    let line_y = run.line_y;
+                    for glyph in run.glyphs {
+                        let phys = glyph.physical((0.0, line_y), 1.0);
+                        list.push(CachedGlyph {
+                            rel_x: phys.x,
+                            rel_y: phys.y,
+                            cache_key: phys.cache_key,
+                        });
+                    }
+                }
+                list
+            });
+
             self.span_cache.insert(text.to_string(), cached);
         }
 

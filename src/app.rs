@@ -5125,7 +5125,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 #[inline]
 fn is_ligature_punctuation(c: char) -> bool {
-    matches!(c, '-' | '>' | '=' | '<' | '!' | ':' | '/' | '*' | '.' | '|' | '&' | '~' | '#' | '+' | '%' | '?' | '^')
+    matches!(c, '-' | '>' | '=' | '<' | '!' | ':' | '/' | '*' | '.' | '|' | '&' | '~' | '#' | '+' | '%' | '?' | '^' | '$')
 }
 
 #[inline]
