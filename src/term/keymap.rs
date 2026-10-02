@@ -36,6 +36,16 @@ pub enum KeyAction {
     IncreaseFontSize,
     DecreaseFontSize,
     ResetFontSize,
+    SplitPaneVertical,
+    SplitPaneHorizontal,
+    ToggleZoomPane,
+    NextPane,
+    PreviousPane,
+    FocusPaneLeft,
+    FocusPaneRight,
+    FocusPaneUp,
+    FocusPaneDown,
+    ClosePane,
 }
 
 pub fn translate_key(key: &Key, mods: Modifiers, option_as_alt: bool) -> Option<KeyAction> {
@@ -77,6 +87,13 @@ pub fn translate_key_event_full(
         }
 
         if mods.shift {
+            if matches!(key, Key::Named(NamedKey::Enter))
+                || physical_key == Some(KeyCode::Enter)
+                || physical_key == Some(KeyCode::NumpadEnter)
+            {
+                return Some(KeyAction::ToggleZoomPane);
+            }
+
             if let Key::Character(ch) = key {
                 match ch.as_str() {
                     "~" | "`" => return Some(KeyAction::CycleNextWindow),
@@ -88,6 +105,7 @@ pub fn translate_key_event_full(
                     "R" | "r" => return Some(KeyAction::ReloadConfig),
                     "U" | "u" => return Some(KeyAction::CheckForUpdates),
                     "Q" | "q" => return Some(KeyAction::CloseAllWindows),
+                    "D" | "d" => return Some(KeyAction::SplitPaneHorizontal),
                     _ => {}
                 }
             }
@@ -97,6 +115,9 @@ pub fn translate_key_event_full(
                     "`" | "~" => return Some(KeyAction::CycleNextWindow),
                     "t" | "T" => return Some(KeyAction::NewTab),
                     "w" | "W" => return Some(KeyAction::CloseTab),
+                    "d" | "D" => return Some(KeyAction::SplitPaneVertical),
+                    "[" => return Some(KeyAction::PreviousPane),
+                    "]" => return Some(KeyAction::NextPane),
                     "q" | "Q" => return Some(KeyAction::Quit),
                     "c" | "C" => return Some(KeyAction::Copy),
                     "v" | "V" => return Some(KeyAction::Paste),
@@ -126,13 +147,26 @@ pub fn translate_key_event_full(
         }
     }
 
-    // 0.02 Option + Command combinations (e.g. Option+Cmd+W or Option+Cmd+Q to close all windows)
+    // 0.02 Option + Command combinations (e.g. Option+Cmd+W or Option+Cmd+Q to close all windows, Option+Cmd+Arrows to focus panes)
     if mods.logo && mods.alt && !mods.ctrl {
         if let Key::Character(ch) = key {
             match ch.as_str() {
                 "w" | "W" | "q" | "Q" => return Some(KeyAction::CloseAllWindows),
                 _ => {}
             }
+        }
+
+        if matches!(key, Key::Named(NamedKey::ArrowLeft)) || physical_key == Some(KeyCode::ArrowLeft) {
+            return Some(KeyAction::FocusPaneLeft);
+        }
+        if matches!(key, Key::Named(NamedKey::ArrowRight)) || physical_key == Some(KeyCode::ArrowRight) {
+            return Some(KeyAction::FocusPaneRight);
+        }
+        if matches!(key, Key::Named(NamedKey::ArrowUp)) || physical_key == Some(KeyCode::ArrowUp) {
+            return Some(KeyAction::FocusPaneUp);
+        }
+        if matches!(key, Key::Named(NamedKey::ArrowDown)) || physical_key == Some(KeyCode::ArrowDown) {
+            return Some(KeyAction::FocusPaneDown);
         }
     }
 
@@ -151,6 +185,13 @@ pub fn translate_key_event_full(
 
     // 0.1 Control + Shift combinations (cross-platform shortcuts)
     if mods.ctrl && mods.shift && !mods.alt && !mods.logo {
+        if matches!(key, Key::Named(NamedKey::Enter))
+            || physical_key == Some(KeyCode::Enter)
+            || physical_key == Some(KeyCode::NumpadEnter)
+        {
+            return Some(KeyAction::ToggleZoomPane);
+        }
+
         if let Key::Character(ch) = key {
             match ch.as_str() {
                 "P" | "p" | "O" | "o" => return Some(KeyAction::ToggleWorkspaceModal),
@@ -161,9 +202,12 @@ pub fn translate_key_event_full(
                 "C" | "c" => return Some(KeyAction::Copy),
                 "V" | "v" => return Some(KeyAction::Paste),
                 "Q" | "q" => return Some(KeyAction::CloseAllWindows),
+                "D" | "d" => return Some(KeyAction::SplitPaneVertical),
+                "H" | "h" => return Some(KeyAction::SplitPaneHorizontal),
                 _ => {}
             }
         }
+
 
         if let Key::Named(named) = key {
             match named {
@@ -532,6 +576,16 @@ pub fn parse_action_string(val: &str, app_cursor: bool) -> Option<KeyAction> {
         "reset_font_size" => Some(KeyAction::ResetFontSize),
         "move_tab_left" => Some(KeyAction::MoveTabLeft),
         "move_tab_right" => Some(KeyAction::MoveTabRight),
+        "split_vertical" | "split_pane_vertical" => Some(KeyAction::SplitPaneVertical),
+        "split_horizontal" | "split_pane_horizontal" => Some(KeyAction::SplitPaneHorizontal),
+        "toggle_zoom" | "toggle_zoom_pane" | "zoom_pane" => Some(KeyAction::ToggleZoomPane),
+        "next_pane" => Some(KeyAction::NextPane),
+        "previous_pane" => Some(KeyAction::PreviousPane),
+        "focus_pane_left" => Some(KeyAction::FocusPaneLeft),
+        "focus_pane_right" => Some(KeyAction::FocusPaneRight),
+        "focus_pane_up" => Some(KeyAction::FocusPaneUp),
+        "focus_pane_down" => Some(KeyAction::FocusPaneDown),
+        "close_pane" => Some(KeyAction::ClosePane),
         "close_all_windows" | "quit_all" | "close_all" => Some(KeyAction::CloseAllWindows),
         "quit" => Some(KeyAction::Quit),
         "home" | "beginning_of_line" => {

@@ -1160,6 +1160,150 @@ fn test_close_all_windows_shortcuts() {
     );
 }
 
+#[test]
+fn test_split_panel_shortcuts_and_keybindings() {
+    let cmd_mods = Modifiers {
+        logo: true,
+        ..Default::default()
+    };
+    let cmd_shift_mods = Modifiers {
+        logo: true,
+        shift: true,
+        ..Default::default()
+    };
+    let cmd_alt_mods = Modifiers {
+        logo: true,
+        alt: true,
+        ..Default::default()
+    };
+    let ctrl_shift_mods = Modifiers {
+        ctrl: true,
+        shift: true,
+        ..Default::default()
+    };
+
+    // 1. macOS defaults
+    #[cfg(target_os = "macos")]
+    {
+        // Cmd+D -> SplitPaneVertical
+        assert_eq!(
+            translate_key(&Key::Character("d".into()), cmd_mods, true),
+            Some(KeyAction::SplitPaneVertical)
+        );
+        // Cmd+Shift+D -> SplitPaneHorizontal
+        assert_eq!(
+            translate_key(&Key::Character("d".into()), cmd_shift_mods, true),
+            Some(KeyAction::SplitPaneHorizontal)
+        );
+        // Cmd+Shift+Enter -> ToggleZoomPane
+        assert_eq!(
+            translate_key(&Key::Named(NamedKey::Enter), cmd_shift_mods, true),
+            Some(KeyAction::ToggleZoomPane)
+        );
+        // Cmd+[ -> PreviousPane
+        assert_eq!(
+            translate_key(&Key::Character("[".into()), cmd_mods, true),
+            Some(KeyAction::PreviousPane)
+        );
+        // Cmd+] -> NextPane
+        assert_eq!(
+            translate_key(&Key::Character("]".into()), cmd_mods, true),
+            Some(KeyAction::NextPane)
+        );
+        // Cmd+Alt+Arrows -> Directional navigation
+        assert_eq!(
+            translate_key(&Key::Named(NamedKey::ArrowLeft), cmd_alt_mods, true),
+            Some(KeyAction::FocusPaneLeft)
+        );
+        assert_eq!(
+            translate_key(&Key::Named(NamedKey::ArrowRight), cmd_alt_mods, true),
+            Some(KeyAction::FocusPaneRight)
+        );
+        assert_eq!(
+            translate_key(&Key::Named(NamedKey::ArrowUp), cmd_alt_mods, true),
+            Some(KeyAction::FocusPaneUp)
+        );
+        assert_eq!(
+            translate_key(&Key::Named(NamedKey::ArrowDown), cmd_alt_mods, true),
+            Some(KeyAction::FocusPaneDown)
+        );
+    }
+
+    // 2. Linux defaults
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Ctrl+Shift+D -> SplitPaneVertical
+        assert_eq!(
+            translate_key(&Key::Character("d".into()), ctrl_shift_mods, true),
+            Some(KeyAction::SplitPaneVertical)
+        );
+        // Ctrl+Shift+H -> SplitPaneHorizontal
+        assert_eq!(
+            translate_key(&Key::Character("h".into()), ctrl_shift_mods, true),
+            Some(KeyAction::SplitPaneHorizontal)
+        );
+        // Ctrl+Shift+Enter -> ToggleZoomPane
+        assert_eq!(
+            translate_key(&Key::Named(NamedKey::Enter), ctrl_shift_mods, true),
+            Some(KeyAction::ToggleZoomPane)
+        );
+    }
+
+    // 3. Custom keybindings via config.toml
+    let mut custom_bindings = std::collections::HashMap::new();
+    custom_bindings.insert("ctrl+shift+v".to_string(), "split_vertical".to_string());
+    custom_bindings.insert("ctrl+shift+s".to_string(), "split_horizontal".to_string());
+    custom_bindings.insert("ctrl+shift+z".to_string(), "toggle_zoom".to_string());
+    custom_bindings.insert("alt+n".to_string(), "next_pane".to_string());
+    custom_bindings.insert("alt+p".to_string(), "previous_pane".to_string());
+    custom_bindings.insert("alt+h".to_string(), "focus_pane_left".to_string());
+    custom_bindings.insert("alt+l".to_string(), "focus_pane_right".to_string());
+    custom_bindings.insert("alt+k".to_string(), "focus_pane_up".to_string());
+    custom_bindings.insert("alt+j".to_string(), "focus_pane_down".to_string());
+
+    let alt_only = Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        translate_key_event_full(&Key::Character("v".into()), None, ctrl_shift_mods, true, false, Some(&custom_bindings)),
+        Some(KeyAction::SplitPaneVertical)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("s".into()), None, ctrl_shift_mods, true, false, Some(&custom_bindings)),
+        Some(KeyAction::SplitPaneHorizontal)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("z".into()), None, ctrl_shift_mods, true, false, Some(&custom_bindings)),
+        Some(KeyAction::ToggleZoomPane)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("n".into()), None, alt_only, true, false, Some(&custom_bindings)),
+        Some(KeyAction::NextPane)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("p".into()), None, alt_only, true, false, Some(&custom_bindings)),
+        Some(KeyAction::PreviousPane)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("h".into()), None, alt_only, true, false, Some(&custom_bindings)),
+        Some(KeyAction::FocusPaneLeft)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("l".into()), None, alt_only, true, false, Some(&custom_bindings)),
+        Some(KeyAction::FocusPaneRight)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("k".into()), None, alt_only, true, false, Some(&custom_bindings)),
+        Some(KeyAction::FocusPaneUp)
+    );
+    assert_eq!(
+        translate_key_event_full(&Key::Character("j".into()), None, alt_only, true, false, Some(&custom_bindings)),
+        Some(KeyAction::FocusPaneDown)
+    );
+}
+
 
 
 

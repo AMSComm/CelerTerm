@@ -78,6 +78,12 @@ Traditional terminal emulators either carry heavy Web / Electron runtimes with h
 | **Paste Clipboard** | `Cmd + V` | `Ctrl + Shift + V` |
 | **Clear Screen** | `Cmd + K` | `Ctrl + L` |
 | **Reset Terminal** | `Cmd + Alt + K` | `Ctrl + Shift + K` |
+| **Split Pane Vertical** | `Cmd + D` | `Ctrl + Shift + D` |
+| **Split Pane Horizontal** | `Cmd + Shift + D` | `Ctrl + Shift + H` |
+| **Toggle Zoom Active Pane** | `Cmd + Shift + Enter` | `Ctrl + Shift + Enter` |
+| **Next / Previous Pane** | `Cmd + ]` / `Cmd + [` | `Ctrl + Shift + ]` / `Ctrl + Shift + [` |
+| **Navigate Panes Directionally** | `Cmd + Alt + Arrows` | `Ctrl + Alt + Arrows` |
+| **Close Active Pane / Tab** | `Cmd + W` | `Ctrl + Shift + W` |
 
 ---
 
@@ -106,6 +112,14 @@ max_scrollback_lines = 1000
 
 [macos]
 option_as_alt = true
+
+[keybindings]
+# Custom shortcuts can be bound to split panel actions:
+# "ctrl+shift+v" = "split_vertical"
+# "ctrl+shift+s" = "split_horizontal"
+# "ctrl+shift+z" = "toggle_zoom"
+# "alt+n" = "next_pane"
+# "alt+p" = "previous_pane"
 ```
 
 ---

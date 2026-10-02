@@ -948,6 +948,128 @@ fn test_tab_color_customization_and_persistence() {
     assert_eq!(active_ws.tabs[0].color, None);
 }
 
+#[test]
+fn test_split_panel_and_pane_navigation() {
+    let mut manager = WorkspaceManager::new();
+    let ws = manager.get_active_workspace().unwrap();
+    let tab1_id = ws.tabs[0].id.clone();
+
+    // Initial state: 1 pane (which is the tab id)
+    assert_eq!(ws.tabs[0].all_pane_ids(), vec![tab1_id.clone()]);
+    assert_eq!(ws.tabs[0].active_pane_id(), tab1_id);
+
+    // Split vertical: pane 1 -> pane 1 (left) + pane 2 (right)
+    let pane2_id = manager.split_active_pane(
+        celerterm::workspace::SplitDirection::Vertical,
+        "pane_2",
+        "Shell 2",
+        PathBuf::from("/tmp/p2"),
+    ).expect("Split active pane succeeds");
+
+    assert_eq!(pane2_id, "pane_2");
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), "pane_2");
+    assert_eq!(ws.tabs[0].all_pane_ids(), vec![tab1_id.clone(), "pane_2".to_string()]);
+
+    // Split horizontal on pane 2: pane 2 -> pane 2 (top) + pane 3 (bottom)
+    let pane3_id = manager.split_active_pane(
+        celerterm::workspace::SplitDirection::Horizontal,
+        "pane_3",
+        "Shell 3",
+        PathBuf::from("/tmp/p3"),
+    ).expect("Split horizontal succeeds");
+
+    assert_eq!(pane3_id, "pane_3");
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), "pane_3");
+    assert_eq!(ws.tabs[0].all_pane_ids(), vec![tab1_id.clone(), "pane_2".to_string(), "pane_3".to_string()]);
+
+    // Navigation: next_pane cycles through panes
+    assert!(manager.next_pane());
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), tab1_id); // wrapped to first
+
+    assert!(manager.next_pane());
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), "pane_2");
+
+    // previous_pane
+    assert!(manager.previous_pane());
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), tab1_id);
+
+    // Direct focus
+    assert!(manager.focus_pane("pane_3"));
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), "pane_3");
+}
+
+#[test]
+fn test_split_panel_close_pane_and_zoom() {
+    let mut manager = WorkspaceManager::new();
+    let ws = manager.get_active_workspace().unwrap();
+    let tab1_id = ws.tabs[0].id.clone();
+
+    // Splitting
+    let _ = manager.split_active_pane(
+        celerterm::workspace::SplitDirection::Vertical,
+        "pane_2",
+        "Shell 2",
+        PathBuf::from("/tmp/p2"),
+    );
+
+    // Toggle zoom
+    assert!(!manager.get_active_workspace().unwrap().tabs[0].is_zoomed);
+    assert!(manager.toggle_zoom_active_pane());
+    assert!(manager.get_active_workspace().unwrap().tabs[0].is_zoomed);
+    assert!(!manager.toggle_zoom_active_pane());
+    assert!(!manager.get_active_workspace().unwrap().tabs[0].is_zoomed);
+
+    // Close active pane (pane_2): should return Some("pane_2") and focus tab1_id
+    let closed = manager.close_active_pane().expect("Close pane succeeds");
+    assert_eq!(closed, Some("pane_2".to_string()));
+
+    let ws = manager.get_active_workspace().unwrap();
+    assert_eq!(ws.tabs[0].active_pane_id(), tab1_id);
+    assert_eq!(ws.tabs[0].all_pane_ids(), vec![tab1_id.clone()]);
+
+    // When only 1 pane is left, close_active_pane returns Ok(None) so tab can be closed
+    let closed_last = manager.close_active_pane().expect("Closing last pane returns None");
+    assert_eq!(closed_last, None);
+}
+
+#[test]
+fn test_split_panel_snapshot_serialization_and_restore() {
+    let mut manager = WorkspaceManager::new();
+    let _ = manager.split_active_pane(
+        celerterm::workspace::SplitDirection::Vertical,
+        "pane_b",
+        "Build Pane",
+        PathBuf::from("/tmp/build"),
+    );
+
+    // Set scrollback cache in pane_b
+    let ws = manager.get_active_workspace_mut().unwrap();
+    let tab = &mut ws.tabs[0];
+    let tree = tab.ensure_pane_tree();
+    if let Some(p) = tree.find_pane_mut("pane_b") {
+        p.scrollback_cache.push("Build successful in 0.4s".to_string());
+    }
+
+    let json = save_snapshot_to_string(&manager).expect("Serialization succeeds");
+    assert!(json.contains("pane_b"));
+    assert!(json.contains("Build successful in 0.4s"));
+
+    // Restore from json
+    let restored = load_snapshot_from_str(&json).expect("Deserialization succeeds");
+    let r_tab = &restored.workspaces[0].tabs[0];
+    assert_eq!(r_tab.active_pane_id(), "pane_b");
+    assert_eq!(r_tab.all_pane_ids().len(), 2);
+    let tree = r_tab.pane_tree();
+    let pane_b = tree.find_pane("pane_b").expect("pane_b exists in restored tree");
+    assert_eq!(pane_b.scrollback_cache, vec!["Build successful in 0.4s".to_string()]);
+}
+
 
 
 

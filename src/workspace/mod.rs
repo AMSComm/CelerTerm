@@ -2,9 +2,11 @@ pub mod manager;
 pub mod storage;
 pub mod instances;
 pub mod palette;
+pub mod pane;
 
 pub use manager::{Tab, Workspace, WorkspaceManager};
 pub use palette::{WORKSPACE_ACCENT_PALETTE, WORKSPACE_BACKGROUND_PALETTE, PaletteColor, normalize_hex};
+pub use pane::{PaneInfo, PaneNode, SplitDirection, PaneRect, DividerRect};
 pub use storage::{load_snapshot_from_file, save_snapshot_to_file, get_default_snapshot_path, merge_workspace_managers};
 pub use instances::{
     ActiveInstance, get_default_instances_path, get_all_active_instances,
@@ -13,4 +15,5 @@ pub use instances::{
     cycle_next_instance, cycle_next_instance_in,
     close_instance, close_all_other_instances, unregister_all_instances,
 };
+
 

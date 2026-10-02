@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use super::pane::{PaneInfo, PaneNode, SplitDirection};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tab {
@@ -9,16 +10,28 @@ pub struct Tab {
     pub scrollback_cache: Vec<String>,
     #[serde(default)]
     pub color: Option<String>,
+    #[serde(default)]
+    pub pane_tree: Option<PaneNode>,
+    #[serde(default)]
+    pub active_pane_id: Option<String>,
+    #[serde(default)]
+    pub is_zoomed: bool,
 }
 
 impl Tab {
     pub fn new(id: impl Into<String>, title: impl Into<String>, cwd: PathBuf) -> Self {
+        let id_str = id.into();
+        let title_str = title.into();
+        let leaf = PaneNode::new_leaf(PaneInfo::new(&id_str, &title_str, cwd.clone()));
         Self {
-            id: id.into(),
-            title: title.into(),
+            id: id_str.clone(),
+            title: title_str,
             cwd,
             scrollback_cache: Vec::new(),
             color: None,
+            pane_tree: Some(leaf),
+            active_pane_id: Some(id_str),
+            is_zoomed: false,
         }
     }
 
@@ -28,12 +41,49 @@ impl Tab {
         cwd: PathBuf,
         color: Option<String>,
     ) -> Self {
-        Self {
-            id: id.into(),
-            title: title.into(),
-            cwd,
-            scrollback_cache: Vec::new(),
-            color,
+        let mut tab = Self::new(id, title, cwd);
+        tab.color = color;
+        tab
+    }
+
+    pub fn ensure_pane_tree(&mut self) -> &mut PaneNode {
+        if self.pane_tree.is_none() {
+            let pane = PaneInfo {
+                id: self.id.clone(),
+                title: self.title.clone(),
+                cwd: self.cwd.clone(),
+                scrollback_cache: self.scrollback_cache.clone(),
+            };
+            self.pane_tree = Some(PaneNode::new_leaf(pane));
+            self.active_pane_id = Some(self.id.clone());
+        }
+        self.pane_tree.as_mut().unwrap()
+    }
+
+    pub fn pane_tree(&self) -> PaneNode {
+        if let Some(ref tree) = self.pane_tree {
+            tree.clone()
+        } else {
+            PaneNode::new_leaf(PaneInfo {
+                id: self.id.clone(),
+                title: self.title.clone(),
+                cwd: self.cwd.clone(),
+                scrollback_cache: self.scrollback_cache.clone(),
+            })
+        }
+    }
+
+    pub fn active_pane_id(&self) -> String {
+        self.active_pane_id
+            .clone()
+            .unwrap_or_else(|| self.id.clone())
+    }
+
+    pub fn all_pane_ids(&self) -> Vec<String> {
+        if let Some(ref tree) = self.pane_tree {
+            tree.all_panes().into_iter().map(|p| p.id.clone()).collect()
+        } else {
+            vec![self.id.clone()]
         }
     }
 
@@ -114,6 +164,14 @@ impl Workspace {
         } else {
             default_bg
         }
+    }
+
+    pub fn get_active_tab(&self) -> Option<&Tab> {
+        self.tabs.iter().find(|t| t.id == self.active_tab_id)
+    }
+
+    pub fn get_active_tab_mut(&mut self) -> Option<&mut Tab> {
+        self.tabs.iter_mut().find(|t| t.id == self.active_tab_id)
     }
 }
 
@@ -410,5 +468,115 @@ impl WorkspaceManager {
             Err("Workspace not found".to_string())
         }
     }
+
+    pub fn split_active_pane(
+        &mut self,
+        direction: SplitDirection,
+        new_pane_id: &str,
+        new_title: &str,
+        cwd: PathBuf,
+    ) -> Result<String, String> {
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        let tab = ws.get_active_tab_mut().ok_or("No active tab found")?;
+        let active_pane_id = tab.active_pane_id();
+        let new_pane = PaneInfo::new(new_pane_id, new_title, cwd);
+
+        tab.ensure_pane_tree();
+        let tree = tab.pane_tree.as_mut().unwrap();
+        if tree.split_pane(&active_pane_id, direction, new_pane) {
+            tab.active_pane_id = Some(new_pane_id.to_string());
+            tab.is_zoomed = false;
+            Ok(new_pane_id.to_string())
+        } else {
+            Err("Failed to split active pane: target pane not found".to_string())
+        }
+    }
+
+    pub fn close_active_pane(&mut self) -> Result<Option<String>, String> {
+        let ws = self.get_active_workspace_mut().ok_or("No active workspace found")?;
+        let tab = ws.get_active_tab_mut().ok_or("No active tab found")?;
+        tab.ensure_pane_tree();
+
+        let active_id = tab.active_pane_id();
+        let tree = tab.pane_tree.as_mut().unwrap();
+        if tree.count_panes() <= 1 {
+            return Ok(None);
+        }
+
+        let next_focus = tree.previous_pane_id(&active_id)
+            .or_else(|| tree.next_pane_id(&active_id));
+
+        if let Some(removed) = tree.remove_pane(&active_id) {
+            tab.active_pane_id = next_focus;
+            tab.is_zoomed = false;
+            Ok(Some(removed.id))
+        } else {
+            Err("Failed to remove pane".to_string())
+        }
+    }
+
+    pub fn toggle_zoom_active_pane(&mut self) -> bool {
+        if let Some(ws) = self.get_active_workspace_mut()
+            && let Some(tab) = ws.get_active_tab_mut()
+        {
+            tab.is_zoomed = !tab.is_zoomed;
+            tab.is_zoomed
+        } else {
+            false
+        }
+    }
+
+    pub fn next_pane(&mut self) -> bool {
+        if let Some(ws) = self.get_active_workspace_mut()
+            && let Some(tab) = ws.get_active_tab_mut()
+        {
+            let current = tab.active_pane_id();
+            let tree = tab.ensure_pane_tree();
+            if let Some(next) = tree.next_pane_id(&current) {
+                tab.active_pane_id = Some(next);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn previous_pane(&mut self) -> bool {
+        if let Some(ws) = self.get_active_workspace_mut()
+            && let Some(tab) = ws.get_active_tab_mut()
+        {
+            let current = tab.active_pane_id();
+            let tree = tab.ensure_pane_tree();
+            if let Some(prev) = tree.previous_pane_id(&current) {
+                tab.active_pane_id = Some(prev);
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn focus_pane(&mut self, pane_id: &str) -> bool {
+        if let Some(ws) = self.get_active_workspace_mut()
+            && let Some(tab) = ws.get_active_tab_mut()
+        {
+            let tree = tab.ensure_pane_tree();
+            if tree.find_pane(pane_id).is_some() {
+                tab.active_pane_id = Some(pane_id.to_string());
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn adjust_active_tab_divider(&mut self, divider_id: usize, new_ratio: f32) -> bool {
+        if let Some(ws) = self.get_active_workspace_mut()
+            && let Some(tab) = ws.get_active_tab_mut()
+            && let Some(ref mut tree) = tab.pane_tree
+        {
+            tree.adjust_ratio_by_id(divider_id, new_ratio)
+        } else {
+            false
+        }
+    }
 }
+
 
