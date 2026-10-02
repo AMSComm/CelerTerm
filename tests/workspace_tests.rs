@@ -269,6 +269,39 @@ fn test_format_tab_title_logic() {
         format_tab_title(Some("docker"), Some(&PathBuf::from("/Users/test")), None),
         "docker"
     );
+
+    // 6. Max 20 characters limitation & truncation
+    assert_eq!(
+        format_tab_title(None, Some(&PathBuf::from("/Users/test/12345678901234567890")), None),
+        "12345678901234567890"
+    );
+    assert_eq!(
+        format_tab_title(None, Some(&PathBuf::from("/Users/test/my_very_long_project_directory")), None),
+        "my_very_long_projec…"
+    );
+    assert_eq!(
+        format_tab_title(None, Some(&PathBuf::from("/Users/test/my_very_long_project_directory")), None).chars().count(),
+        20
+    );
+}
+
+#[test]
+fn test_tab_title_truncation_20_chars() {
+    use celerterm::pty::truncate_tab_title;
+
+    // Under limit
+    assert_eq!(truncate_tab_title("short", 20), "short");
+    // Exactly 20 chars
+    assert_eq!(truncate_tab_title("12345678901234567890", 20), "12345678901234567890");
+    // Over limit: 21 chars -> 19 chars + ellipsis
+    assert_eq!(truncate_tab_title("123456789012345678901", 20), "1234567890123456789…");
+    assert_eq!(truncate_tab_title("123456789012345678901", 20).chars().count(), 20);
+
+    // Multi-byte or long strings
+    let long_title = "Internationalized project directory";
+    let truncated_title = truncate_tab_title(long_title, 20);
+    assert_eq!(truncated_title.chars().count(), 20);
+    assert!(truncated_title.ends_with('…'));
 }
 
 #[test]

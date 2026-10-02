@@ -318,7 +318,31 @@ pub fn get_process_name(pid: u32) -> Option<String> {
     resolved_command.or(Some(raw_name))
 }
 
+pub const MAX_TAB_TITLE_CHARS: usize = 20;
+
+/// Truncate a tab title to `max_chars` unicode characters, appending an ellipsis `…` if truncated.
+pub fn truncate_tab_title(title: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    if title.chars().count() > max_chars {
+        let prefix: String = title.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{}…", prefix)
+    } else {
+        title.to_string()
+    }
+}
+
 pub fn format_tab_title(
+    foreground_proc: Option<&str>,
+    cwd: Option<&Path>,
+    dynamic_title: Option<&str>,
+) -> String {
+    let raw = format_tab_title_raw(foreground_proc, cwd, dynamic_title);
+    truncate_tab_title(&raw, MAX_TAB_TITLE_CHARS)
+}
+
+fn format_tab_title_raw(
     foreground_proc: Option<&str>,
     cwd: Option<&Path>,
     dynamic_title: Option<&str>,

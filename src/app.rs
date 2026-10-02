@@ -2750,7 +2750,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         .map(|ws| ws.tabs.clone())
                         .unwrap_or_default();
                     let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
-                        (t.id.clone(), format!("{}. {}", idx + 1, t.title))
+                        let truncated = crate::pty::truncate_tab_title(&t.title, crate::pty::MAX_TAB_TITLE_CHARS);
+                        (t.id.clone(), format!("{}. {}", idx + 1, truncated))
                     }).collect();
 
                     let header = calculate_header_layout(
@@ -3650,7 +3651,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         .unwrap_or_default();
 
                     let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
-                        (t.id.clone(), format!("{}. {}", idx + 1, t.title))
+                        let truncated = crate::pty::truncate_tab_title(&t.title, crate::pty::MAX_TAB_TITLE_CHARS);
+                        (t.id.clone(), format!("{}. {}", idx + 1, truncated))
                     }).collect();
 
                     let active_ws_name = self.workspace_mgr.get_active_workspace()
@@ -3802,7 +3804,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
                             let tab_text_x = rect.x + (8.0 * self.scale_factor);
 
-                            let base_title = format!("{}. {}", idx + 1, raw_tab.map(|t| t.title.as_str()).unwrap_or("Tab"));
+                            let raw_title = raw_tab.map(|t| t.title.as_str()).unwrap_or("Tab");
+                            let truncated = crate::pty::truncate_tab_title(raw_title, crate::pty::MAX_TAB_TITLE_CHARS);
+                            let base_title = format!("{}. {}", idx + 1, truncated);
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
