@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.21] - 2026-10-02
+
+### Added & Improved
+
+- **Split Panel System**:
+  - Binary split tree architecture (`PaneNode`) enabling arbitrary nested vertical (`Cmd+D` / `Ctrl+Shift+D`) and horizontal (`Cmd+Shift+D` / `Ctrl+Shift+E`) pane splits.
+  - Interactive mouse drag divider resizing with real-time cursor updating (`ColResize` / `RowResize`) and 1px separator lines.
+  - Full session snapshot persistence and restoration in `snapshots.json`, preserving split hierarchy, ratios, active pane focus, working directory, and pane scrollback history.
+  - Temporary pane zoom toggle (`Cmd+Shift+Enter` / `Ctrl+Shift+Enter`) to expand the focused pane to fill the entire tab window and toggle back without losing split layout.
+  - Seamless pane navigation shortcuts: cycle next/previous pane (`Cmd+]` / `Cmd+[` or `Ctrl+Alt+]` / `Ctrl+Alt+[`), directional navigation (`Cmd+Alt+Arrows` or `Ctrl+Alt+Arrows`), and close active pane (`Cmd+W` / `Ctrl+Shift+W`).
+  - Active pane focus highlight with subtle accent border outlining.
+  - Fully configurable keybindings in `config.toml` under `[keybindings]` (`split_vertical`, `split_horizontal`, `toggle_zoom`, `next_pane`, `prev_pane`, `focus_left`, `focus_right`, `focus_up`, `focus_down`, `close_pane`).
+
+- **Tab Title Truncation**:
+  - Enforced a 20-character limit on tab titles with unicode-aware ellipsis truncation (`…`) to prevent long process titles or file paths from expanding tab widths and crowding out titlebar tabs.
+  - Fully updated titlebar layout computation, click hit-testing, and dynamic width allocation.
+
 ## [0.2.20] - 2026-10-01
 
 ### Fixed
