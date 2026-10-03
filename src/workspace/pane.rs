@@ -57,6 +57,18 @@ pub struct PaneRect {
     pub height: f32,
     pub cols: usize,
     pub rows: usize,
+    pub pad_x: f32,
+    pub pad_y: f32,
+}
+
+impl PaneRect {
+    pub fn content_x(&self) -> f32 {
+        self.x + self.pad_x
+    }
+
+    pub fn content_y(&self) -> f32 {
+        self.y + self.pad_y
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -301,6 +313,8 @@ impl PaneNode {
                     height,
                     cols,
                     rows,
+                    pad_x: 0.0,
+                    pad_y: 0.0,
                 });
             }
             PaneNode::Split {
@@ -601,5 +615,22 @@ mod tests {
         // available = 1000. w1 = round(1000 * 0.3) = 300.
         assert_eq!(panes[0].width, 300.0);
         assert_eq!(panes[1].width, 700.0);
+    }
+
+    #[test]
+    fn test_pane_rect_content_offsets() {
+        let rect = PaneRect {
+            pane_id: "p1".to_string(),
+            x: 10.0,
+            y: 20.0,
+            width: 400.0,
+            height: 300.0,
+            cols: 40,
+            rows: 15,
+            pad_x: 4.0,
+            pad_y: 3.0,
+        };
+        assert_eq!(rect.content_x(), 14.0);
+        assert_eq!(rect.content_y(), 23.0);
     }
 }

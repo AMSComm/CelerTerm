@@ -428,11 +428,15 @@ impl CelerApp {
                 && let Some(active_tab) = active_ws.get_active_tab()
             {
                 if !active_tab.is_zoomed && active_tab.all_pane_ids().len() > 1 {
-                    let body_y = header_h + pad_y;
-                    let body_h = (height - body_y - pad_y).max(10.0);
-                    let body_w = (width - pad_x * 2.0).max(10.0);
-                    let tree = active_tab.pane_tree();
-                    let (panes, _) = tree.calculate_layout(pad_x, body_y, body_w, body_h, self.renderer.cell_width, self.renderer.cell_height);
+                    let (panes, _) = Self::compute_tab_layout(
+                        &self.workspace_mgr,
+                        &self.config.window,
+                        self.scale_factor,
+                        self.renderer.cell_width,
+                        self.renderer.cell_height,
+                        width,
+                        height,
+                    );
                     for p in panes {
                         pane_sizes.insert(p.pane_id, (p.cols.max(MIN_COLS), p.rows.max(MIN_ROWS)));
                     }
@@ -613,12 +617,27 @@ impl CelerApp {
                     height: body_h,
                     cols,
                     rows,
+                    pad_x: 0.0,
+                    pad_y: 0.0,
                 }],
                 vec![],
             )
         } else {
             let tree = active_tab.pane_tree();
-            tree.calculate_layout(pad_x, body_y, body_w, body_h, cell_width, cell_height)
+            let (mut panes, dividers) = tree.calculate_layout(pad_x, body_y, body_w, body_h, cell_width, cell_height);
+            let pane_pad_x = (4.0 * scale).round();
+            let pane_pad_y = (3.0 * scale).round();
+            let cell_w = cell_width.max(1.0);
+            let cell_h = cell_height.max(1.0);
+            for p in &mut panes {
+                p.pad_x = pane_pad_x;
+                p.pad_y = pane_pad_y;
+                let content_w = (p.width - 2.0 * pane_pad_x).max(cell_w);
+                let content_h = (p.height - 2.0 * pane_pad_y).max(cell_h);
+                p.cols = (content_w / cell_w).floor().max(1.0) as usize;
+                p.rows = (content_h / cell_h).floor().max(1.0) as usize;
+            }
+            (panes, dividers)
         }
     }
 
@@ -722,24 +741,10 @@ impl CelerApp {
     }
 
     pub fn navigate_pane_directional(&mut self, dx: f32, dy: f32) {
-        let (win_w, win_h) = if let Some(ref win) = self.window {
-            let s = win.inner_size();
-            (s.width as f32, s.height as f32)
-        } else {
-            (800.0, 600.0)
-        };
-
-        let scale = self.scale_factor.max(0.5);
-        let header_h = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
-        let body_h = (win_h - header_h).max(10.0);
-        let cell_w = self.renderer.cell_width;
-        let cell_h = self.renderer.cell_height;
-
         let Some(active_ws) = self.workspace_mgr.get_active_workspace() else { return };
         let Some(tab) = active_ws.get_active_tab() else { return };
         let active_id = tab.active_pane_id();
-        let tree = tab.pane_tree();
-        let (panes, _) = tree.calculate_layout(0.0, header_h, win_w, body_h, cell_w, cell_h);
+        let (panes, _) = self.get_current_tab_layout();
 
         if let Some(current_rect) = panes.iter().find(|p| p.pane_id == active_id) {
             let cx = current_rect.x + current_rect.width * 0.5;
@@ -1934,8 +1939,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let lines = session.screen.size.lines;
 
                     if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
-                        let start_x = target_pane.x;
-                        let start_y = target_pane.y;
+                        let start_x = target_pane.content_x();
+                        let start_y = target_pane.content_y();
 
                         let mx = self.mouse_pos.0 as f32;
                         let my = self.mouse_pos.1 as f32;
@@ -1975,8 +1980,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let lines = session.screen.size.lines;
 
                     if cell_w > 0.0 && cell_h > 0.0 && cols > 0 && lines > 0 {
-                        let start_x = target_pane.x;
-                        let start_y = target_pane.y;
+                        let start_x = target_pane.content_x();
+                        let start_y = target_pane.content_y();
 
                         let mx = self.mouse_pos.0 as f32;
                         let my = self.mouse_pos.1 as f32;
@@ -2169,8 +2174,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     if let Some(ref pane_id) = target_pane_id
                         && let Some(session) = self.tab_sessions.get_mut(pane_id)
                     {
-                        let pane_x = target_pane.map(|p| p.x).unwrap_or_else(|| (self.config.window.padding_x * self.scale_factor).round());
-                        let pane_y = target_pane.map(|p| p.y).unwrap_or_else(|| {
+                        let pane_x = target_pane.map(|p| p.content_x()).unwrap_or_else(|| (self.config.window.padding_x * self.scale_factor).round());
+                        let pane_y = target_pane.map(|p| p.content_y()).unwrap_or_else(|| {
                             let header_h = if self.config.window.tabs_in_titlebar { (26.0 * self.scale_factor).round() } else { 0.0 };
                             let pad_y = (self.config.window.padding_y * self.scale_factor).round();
                             header_h + pad_y
@@ -2950,8 +2955,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 _ => None,
                             };
 
-                            let start_x = target_pane.x;
-                            let start_y = target_pane.y;
+                            let start_x = target_pane.content_x();
+                            let start_y = target_pane.content_y();
                             let cell_w = self.renderer.cell_width;
                             let cell_h = self.renderer.cell_height;
 
@@ -3061,8 +3066,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                         if let Some(btn_num) = btn_code {
                             let pane_rect = self.get_active_pane_rect();
-                            let start_x = pane_rect.as_ref().map(|p| p.x).unwrap_or((self.config.window.padding_x * self.scale_factor).round());
-                            let start_y = pane_rect.as_ref().map(|p| p.y).unwrap_or_else(|| {
+                            let start_x = pane_rect.as_ref().map(|p| p.content_x()).unwrap_or((self.config.window.padding_x * self.scale_factor).round());
+                            let start_y = pane_rect.as_ref().map(|p| p.content_y()).unwrap_or_else(|| {
                                 let header_h = if self.config.window.tabs_in_titlebar { (26.0 * self.scale_factor.max(1.0)).round() } else { 0.0 };
                                 let pad_y = (self.config.window.padding_y * self.scale_factor).round();
                                 header_h + pad_y
@@ -3904,8 +3909,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             });
                         }
 
-                        let start_x = pane_rect.x;
-                        let start_y = pane_rect.y;
+                        let start_x = pane_rect.content_x();
+                        let start_y = pane_rect.content_y();
                         let cell_w = self.renderer.cell_width;
                         let cell_h = self.renderer.cell_height;
                         let cols = active_session.screen.size.columns;
@@ -3919,7 +3924,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         // Pass 1: Draw all cell backgrounds across lines
                         for line_idx in 0..lines {
                             let y = start_y + (line_idx as f32) * cell_h;
-                            if y + cell_h > (start_y + pane_rect.height).min(height as f32) {
+                            if y + cell_h > (pane_rect.y + pane_rect.height).min(height as f32) {
                                 break;
                             }
                             let grid_line = Line(line_idx as i32 - display_offset as i32);
@@ -3960,7 +3965,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         // Pass 2: Draw glyphs, geometric box characters, icons, and ligatures
                         for line_idx in 0..lines {
                             let y = start_y + (line_idx as f32) * cell_h;
-                            if y + cell_h > (start_y + pane_rect.height).min(height as f32) {
+                            if y + cell_h > (pane_rect.y + pane_rect.height).min(height as f32) {
                                 break;
                             }
 
@@ -4071,8 +4076,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 let cursor_x = start_x + (cursor_col as f32) * cell_w;
                                 let cursor_y = start_y + (cursor_row as f32) * cell_h;
 
-                                if cursor_y + cell_h <= (start_y + pane_rect.height).min(height as f32)
-                                    && cursor_x + cell_w <= (start_x + pane_rect.width).min(width as f32)
+                                if cursor_y + cell_h <= (pane_rect.y + pane_rect.height).min(height as f32)
+                                    && cursor_x + cell_w <= (pane_rect.x + pane_rect.width).min(width as f32)
                                 {
                                     // Anchor native macOS IME candidate window right below cursor.
                                     if let Some(ref window) = self.window {
@@ -4202,19 +4207,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
 
-                        // Outline focused pane if multiple panes exist
-                        if is_focused && panes_to_render.len() > 1 {
-                            draw_outline_rect(
-                                &mut buffer,
-                                (width, height),
-                                (pane_rect.x as usize, pane_rect.y as usize, pane_rect.width as usize, pane_rect.height as usize),
-                                1,
-                                active_accent,
-                            );
-                        }
                     }
 
-                    // Draw dividers
+                    // Draw dividers (Tokyo Night border #3b4261)
                     for div in &dividers_to_render {
                         TextRenderer::draw_rect(
                             &mut buffer,
@@ -4224,8 +4219,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             div.y.round() as usize,
                             div.width.max(1.0).round() as usize,
                             div.height.max(1.0).round() as usize,
-                            0x00292E42,
+                            0x003B4261,
                         );
+                    }
+
+                    // Outline focused pane on top if multiple panes exist
+                    if panes_to_render.len() > 1 {
+                        for pane_rect in &panes_to_render {
+                            if pane_rect.pane_id == active_focused_pane_id {
+                                draw_outline_rect(
+                                    &mut buffer,
+                                    (width, height),
+                                    (pane_rect.x as usize, pane_rect.y as usize, pane_rect.width as usize, pane_rect.height as usize),
+                                    1,
+                                    active_accent,
+                                );
+                            }
+                        }
                     }
 
 

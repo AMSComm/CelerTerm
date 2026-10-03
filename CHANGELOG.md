@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.22] - 2026-10-03
+
+### Improved & Polished
+
+- **Split Panel UI & Spacing**:
+  - Added subtle inner padding (`pad_x` ~4px, `pad_y` ~3px) inside each split pane, preventing terminal text and cursor from pressing directly against pane borders and divider lines.
+  - Dynamically recalculated terminal grid columns and rows to fit the inner content area cleanly, preventing text overflow and clipping.
+  - Enhanced pane divider contrast by switching separator lines to Tokyo Night border `#3b4261` (`0x003B4261`), making divider lines crisp and distinct across all displays.
+  - Layered focused pane accent outline over dividers for a seamless active pane border.
+  - Synchronized mouse click, drag selection, and SGR mouse reporting coordinates with the padded pane content area.
+
 ## [0.2.21] - 2026-10-02
 
 ### Added & Improved

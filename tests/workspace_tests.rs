@@ -1103,6 +1103,58 @@ fn test_split_panel_snapshot_serialization_and_restore() {
     assert_eq!(pane_b.scrollback_cache, vec!["Build successful in 0.4s".to_string()]);
 }
 
+#[test]
+fn test_pane_inner_padding_and_divider_layout() {
+    let mut manager = WorkspaceManager::new();
+    let tab1_id = manager.get_active_workspace().unwrap().tabs[0].id.clone();
+    let _ = manager.split_active_pane(
+        celerterm::workspace::SplitDirection::Vertical,
+        "pane_right",
+        "Right Shell",
+        PathBuf::from("/tmp/right"),
+    ).expect("Split succeeds");
+
+    let ws = manager.get_active_workspace().unwrap();
+    let tab = &ws.tabs[0];
+    let tree = tab.pane_tree();
+
+    let cell_w = 10.0;
+    let cell_h = 20.0;
+    let (mut panes, dividers) = tree.calculate_layout(0.0, 0.0, 1001.0, 600.0, cell_w, cell_h);
+
+    assert_eq!(panes.len(), 2);
+    assert_eq!(dividers.len(), 1);
+    assert_eq!(dividers[0].x, 500.0);
+
+    // Apply inner padding as done in compute_tab_layout
+    let pad_x = 4.0;
+    let pad_y = 3.0;
+    for p in &mut panes {
+        p.pad_x = pad_x;
+        p.pad_y = pad_y;
+        let content_w = (p.width - 2.0 * pad_x).max(cell_w);
+        let content_h = (p.height - 2.0 * pad_y).max(cell_h);
+        p.cols = (content_w / cell_w).floor().max(1.0) as usize;
+        p.rows = (content_h / cell_h).floor().max(1.0) as usize;
+    }
+
+    // Pane 1 (left)
+    assert_eq!(panes[0].pane_id, tab1_id);
+    assert_eq!(panes[0].x, 0.0);
+    assert_eq!(panes[0].content_x(), 4.0);
+    assert_eq!(panes[0].content_y(), 3.0);
+    let right_text_end = panes[0].content_x() + (panes[0].cols as f32 * cell_w);
+    assert!(right_text_end <= dividers[0].x - pad_x);
+
+    // Pane 2 (right)
+    assert_eq!(panes[1].pane_id, "pane_right");
+    assert_eq!(panes[1].x, 501.0);
+    assert_eq!(panes[1].content_x(), 505.0); // 4px padding away from divider
+    assert!(panes[1].content_x() > dividers[0].x + dividers[0].width);
+    let right_pane_end = panes[1].content_x() + (panes[1].cols as f32 * cell_w);
+    assert!(right_pane_end <= panes[1].x + panes[1].width);
+}
+
 
 
 
