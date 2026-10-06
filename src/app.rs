@@ -213,6 +213,8 @@ impl CelerApp {
     pub fn new() -> Self {
         crate::pty::bootstrap_env_path();
         crate::window::disable_app_nap();
+        #[cfg(target_os = "macos")]
+        crate::update::ensure_bundle_signed_on_startup();
         let config = load_config();
         let mut workspace_mgr = WorkspaceManager::new();
 

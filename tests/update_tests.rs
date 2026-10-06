@@ -206,9 +206,10 @@ fn test_generate_restart_script_single_workspace() {
     assert!(script.contains("kill -0 1234"));
     #[cfg(target_os = "macos")]
     {
+        assert!(script.contains("codesign --force --deep -s 'CelerTerm-Local' \"/tmp/celerterm_update/CelerTerm.app\""));
         assert!(script.contains("rm -rf \"/Applications/CelerTerm.app\""));
         assert!(script.contains("mv \"/tmp/celerterm_update/CelerTerm.app\" \"/Applications/CelerTerm.app\""));
-        assert!(script.contains("CelerTerm-Local"));
+        assert!(script.contains("codesign --force --deep -s 'CelerTerm-Local' \"/Applications/CelerTerm.app\""));
         assert!(script.contains("open -n \"/Applications/CelerTerm.app\" --args --workspace \"Term\""));
     }
 }
@@ -229,9 +230,10 @@ fn test_generate_restart_script_multiple_workspaces_and_other_instances() {
     #[cfg(target_os = "macos")]
     {
         assert!(script.contains("for p in 2002 3003; do kill -TERM $p"));
+        assert!(script.contains("codesign --force --deep -s 'CelerTerm-Local' \"/tmp/celerterm_update/CelerTerm.app\""));
         assert!(script.contains("rm -rf \"/Applications/CelerTerm.app\""));
         assert!(script.contains("mv \"/tmp/celerterm_update/CelerTerm.app\" \"/Applications/CelerTerm.app\""));
-        assert!(script.contains("CelerTerm-Local"));
+        assert!(script.contains("codesign --force --deep -s 'CelerTerm-Local' \"/Applications/CelerTerm.app\""));
         assert!(script.contains("open -n \"/Applications/CelerTerm.app\" --args --workspace \"Term\""));
         assert!(script.contains("open -n \"/Applications/CelerTerm.app\" --args --workspace \"Agent\""));
     }

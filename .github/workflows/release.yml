@@ -46,11 +46,15 @@ jobs:
 
       - name: Package macOS App Bundle
         run: |
+          VERSION="${{ steps.vars.outputs.tag }}"
+          VERSION="${VERSION#v}"
           mkdir -p CelerTerm.app/Contents/MacOS
           mkdir -p CelerTerm.app/Contents/Resources
           cp target/release/celerterm CelerTerm.app/Contents/MacOS/celerterm
           chmod +x CelerTerm.app/Contents/MacOS/celerterm
           cp assets/Info.plist CelerTerm.app/Contents/Info.plist
+          plutil -replace CFBundleShortVersionString -string "${VERSION}" CelerTerm.app/Contents/Info.plist 2>/dev/null || true
+          plutil -replace CFBundleVersion -string "${VERSION}" CelerTerm.app/Contents/Info.plist 2>/dev/null || true
           cp assets/AppIcon.icns CelerTerm.app/Contents/Resources/AppIcon.icns
           # Ad-hoc sign app bundle so macOS Sequoia TCC properly recognizes identity
           codesign --force --deep -s - CelerTerm.app

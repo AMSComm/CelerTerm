@@ -61,11 +61,16 @@ fi
 
 # 5. If CelerTerm.app is currently installed, sign it now
 APP_PATH="/Applications/CelerTerm.app"
+if [[ ! -d "${APP_PATH}" && -d "${HOME}/Applications/CelerTerm.app" ]]; then
+    APP_PATH="${HOME}/Applications/CelerTerm.app"
+fi
+
 if [[ -d "${APP_PATH}" ]]; then
     echo "📦 Found ${APP_PATH}. Re-signing with '${CERT_NAME}'..."
     xattr -cr "${APP_PATH}" 2>/dev/null || true
     codesign --force --deep -s "${CERT_NAME}" "${APP_PATH}"
-    echo "✅ Successfully signed ${APP_PATH}."
+    codesign --verify --deep --strict "${APP_PATH}"
+    echo "✅ Successfully signed and verified ${APP_PATH}."
 fi
 
 echo ""
@@ -73,7 +78,7 @@ echo "🎉 Setup complete!"
 echo "👉 Next step (one-time only):"
 echo "   1. Open 'System Settings' > 'Privacy & Security' > 'Full Disk Access'."
 echo "   2. Remove any existing CelerTerm entry with '-'."
-echo "   3. Add '/Applications/CelerTerm.app' back with '+'."
+echo "   3. Add '${APP_PATH}' back with '+'."
 echo ""
-echo "✨ From now on, CelerTerm's auto-updater will automatically re-sign new versions"
+echo "✨ From now on, CelerTerm's auto-updater and startup self-healer will automatically re-sign new versions"
 echo "   with '${CERT_NAME}', keeping Full Disk Access intact across all future updates!"

@@ -258,6 +258,12 @@ pub fn download_and_stage_update(url: &str, asset_name: &str) -> Result<PathBuf,
                 return Err("Binary inside CelerTerm.app is missing".to_string());
             }
 
+            // Remove quarantine attributes and pre-sign staged bundle before swap
+            let _ = Command::new("xattr")
+                .args(["-cr", app_bundle.to_str().unwrap_or("")])
+                .output();
+            let _ = re_sign_bundle_with_local_cert(&app_bundle);
+
             Ok(app_bundle)
         } else {
             Err("Unsupported asset format for macOS auto-update".to_string())
@@ -384,6 +390,10 @@ pub fn generate_restart_script(
         format!(
             "while kill -0 {pid} 2>/dev/null; do sleep 0.05; done; \
              {kill_others}\
+             xattr -cr \"{staged}\" 2>/dev/null || true; \
+             if security find-identity -p codesigning -v 2>/dev/null | grep -q 'CelerTerm-Local'; then \
+                 codesign --force --deep -s 'CelerTerm-Local' \"{staged}\" 2>/dev/null || true; \
+             fi; \
              rm -rf \"{target}\"; \
              mv \"{staged}\" \"{target}\"; \
              xattr -cr \"{target}\" 2>/dev/null || true; \
@@ -488,3 +498,100 @@ pub fn open_browser(url: &str) {
     #[cfg(target_os = "windows")]
     let _ = Command::new("cmd").args(["/C", "start", url]).spawn();
 }
+
+#[cfg(target_os = "macos")]
+pub fn re_sign_bundle_with_local_cert(bundle_path: &Path) -> bool {
+    let bundle_str = match bundle_path.to_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => return false,
+    };
+
+    let check_cert = Command::new("security")
+        .args(["find-identity", "-p", "codesigning", "-v"])
+        .output();
+
+    if let Ok(output) = check_cert {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("CelerTerm-Local") {
+            let _ = Command::new("xattr")
+                .args(["-cr", bundle_str])
+                .output();
+
+            let sign_result = Command::new("codesign")
+                .args(["--force", "--deep", "-s", "CelerTerm-Local", bundle_str])
+                .output();
+
+            if let Ok(res) = sign_result {
+                return res.status.success();
+            }
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub fn ensure_bundle_signed_on_startup() {
+    std::thread::spawn(|| {
+        let app_path = get_target_app_path();
+        if !app_path.exists() {
+            return;
+        }
+
+        let app_path_str = match app_path.to_str() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Check if CelerTerm-Local exists in Keychain
+        let check_cert = Command::new("security")
+            .args(["find-identity", "-p", "codesigning", "-v"])
+            .output();
+
+        let has_local_cert = match check_cert {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains("CelerTerm-Local")
+            }
+            Err(_) => false,
+        };
+
+        if !has_local_cert {
+            return;
+        }
+
+        // Check current signature
+        let cs_output = Command::new("codesign")
+            .args(["-d", "-vvv", app_path_str])
+            .output();
+
+        let needs_sign = match cs_output {
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                !stderr.contains("Authority=CelerTerm-Local")
+            }
+            Err(_) => false,
+        };
+
+        if needs_sign {
+            log::info!("CelerTerm bundle missing CelerTerm-Local signature. Auto-signing in background...");
+            let _ = Command::new("xattr")
+                .args(["-cr", app_path_str])
+                .output();
+            let sign_res = Command::new("codesign")
+                .args(["--force", "--deep", "-s", "CelerTerm-Local", app_path_str])
+                .output();
+            match sign_res {
+                Ok(res) if res.status.success() => {
+                    log::info!("Successfully self-signed {} with CelerTerm-Local", app_path_str);
+                }
+                Ok(res) => {
+                    log::warn!("codesign failed with code {:?}", res.status.code());
+                }
+                Err(e) => {
+                    log::warn!("Failed to invoke codesign: {}", e);
+                }
+            }
+        }
+    });
+}
+
