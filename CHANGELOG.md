@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.23] - 2026-10-07
+
+### Fixed & Improved
+
+- **Instant Tab Title Updates on Process Exit**:
+  - Eliminated the delay where tab titles remained stuck displaying exited process names until an explicit mouse click or keystroke woke up the event loop.
+  - Added foreground process transition tracking (`last_foreground_pid`) to bypass the static redraw throttle immediately upon process completion, returning the tab title to the directory/shell in the very same frame.
+  - Maintained zero CPU overhead while idle at the shell prompt via event-driven `ControlFlow::Wait`.
+  - Added light periodic event loop scheduling (`ControlFlow::WaitUntil` 150ms) exclusively while a foreground process is active to catch silent terminations smoothly without high-frequency polling.
+  - Synchronized title resolution across split pane trees.
+
+- **macOS Permissions Persistence**:
+  - Ensured persistent macOS TCC permissions across local builds and application updates via pre-staging code signing and startup self-healing.
+
 ## [0.2.22] - 2026-10-03
 
 ### Improved & Polished
