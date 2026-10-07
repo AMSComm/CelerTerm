@@ -1155,6 +1155,46 @@ fn test_pane_inner_padding_and_divider_layout() {
     assert!(right_pane_end <= panes[1].x + panes[1].width);
 }
 
+#[test]
+fn test_immediate_tab_title_update_on_process_exit() {
+    use celerterm::app::CelerApp;
+
+    let mut app = CelerApp::new();
+    let tab_id = app.workspace_mgr.get_active_workspace().unwrap().tabs[0].id.clone();
+    app.spawn_tab_session(&tab_id, None).expect("spawn session succeeds");
+
+    // 1. Initial title update should succeed and not be throttled
+    let changed = app.update_tab_titles();
+    assert!(changed);
+    assert!(!app.has_running_process);
+
+    let session = app.tab_sessions.get_mut(&tab_id).unwrap();
+    let shell_pid = session.child_pid.unwrap();
+
+    // 2. Simulate process starting (foreground PID differs from shell)
+    let fake_child_pid = shell_pid + 999;
+    session.last_foreground_pid = Some(shell_pid);
+    
+    // 3. When foreground PID changed to fake_child_pid, transition is detected
+    // Set a custom title as if a process was running
+    if let Some(ws) = app.workspace_mgr.get_active_workspace_mut() {
+        ws.tabs[0].title = "sleep".to_string();
+    }
+    // Simulate session having last_foreground_pid = fake_child_pid
+    let session = app.tab_sessions.get_mut(&tab_id).unwrap();
+    session.last_foreground_pid = Some(fake_child_pid);
+
+    // 4. Now process exits: session.foreground_process_id() returns shell_pid.
+    // Because fg_pid != session.last_foreground_pid (shell_pid != fake_child_pid),
+    // update_tab_titles must NOT throttle even if called immediately (0 ms elapsed)!
+    let title_changed = app.update_tab_titles();
+    assert!(title_changed, "Title must change immediately on process exit transition");
+    assert!(!app.has_running_process, "has_running_process must become false when back in shell");
+
+    let active_title = app.workspace_mgr.get_active_workspace().unwrap().tabs[0].title.clone();
+    assert_ne!(active_title, "sleep", "Tab title must no longer be the exited process name");
+}
+
 
 
 

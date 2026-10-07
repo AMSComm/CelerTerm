@@ -54,6 +54,7 @@ pub struct TabSession {
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     pub child_pid: Option<u32>,
+    pub last_foreground_pid: Option<u32>,
 }
 
 impl TabSession {
@@ -170,12 +171,12 @@ pub struct CelerApp {
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     config: crate::config::Config,
-    workspace_mgr: WorkspaceManager,
+    pub workspace_mgr: WorkspaceManager,
     workspace_modal: WorkspaceModalState,
     update_modal: UpdateModalState,
     tab_color_modal: TabColorModalState,
     app_menu_open: bool,
-    tab_sessions: HashMap<String, TabSession>,
+    pub tab_sessions: HashMap<String, TabSession>,
     renderer: TextRenderer,
     modifiers: ModifiersState,
     proxy: Option<EventLoopProxy<UserEvent>>,
@@ -196,6 +197,8 @@ pub struct CelerApp {
     deleted_workspace_ids: Vec<String>,
     last_snapshot_mtime: Option<std::time::SystemTime>,
     last_title_update: Option<std::time::Instant>,
+    pub has_pending_title_update: bool,
+    pub has_running_process: bool,
     last_redraw_time: std::time::Instant,
     has_pending_redraw: bool,
     is_occluded: bool,
@@ -330,6 +333,8 @@ impl CelerApp {
             deleted_workspace_ids: Vec::new(),
             last_snapshot_mtime: None,
             last_title_update: None,
+            has_pending_title_update: false,
+            has_running_process: false,
             last_redraw_time: std::time::Instant::now(),
             has_pending_redraw: false,
             is_occluded: false,
@@ -562,6 +567,7 @@ impl CelerApp {
             writer,
             master: pty.master,
             child_pid,
+            last_foreground_pid: None,
         };
 
         self.tab_sessions.insert(tab_id.to_string(), session);
@@ -898,50 +904,102 @@ impl CelerApp {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
     }
 
-    pub fn update_tab_titles(&mut self) {
+    pub fn update_tab_titles(&mut self) -> bool {
         let now = std::time::Instant::now();
-        if let Some(last) = self.last_title_update {
-            if now.duration_since(last) < std::time::Duration::from_millis(200) {
-                return;
+
+        // 1. Detect if any foreground process changed or dynamic title arrived
+        let mut any_fg_changed = false;
+        let mut has_running_proc = false;
+
+        for session in self.tab_sessions.values() {
+            let fg_pid = session.foreground_process_id();
+            if fg_pid != session.last_foreground_pid || session.screen.dynamic_title().is_some() {
+                any_fg_changed = true;
+            }
+            if let Some(fpid) = fg_pid
+                && session.child_pid != Some(fpid) && fpid > 0
+            {
+                has_running_proc = true;
             }
         }
-        self.last_title_update = Some(now);
 
-        if let Some(ws) = self.workspace_mgr.get_active_workspace_mut() {
-            for tab in &mut ws.tabs {
-                if let Some(session) = self.tab_sessions.get(&tab.id) {
-                    let fg_pid = session.foreground_process_id();
-                    let child_pid = session.child_pid;
+        self.has_running_process = has_running_proc;
 
-                    // Update live cwd of the shell process
-                    if let Some(cpid) = child_pid
-                        && let Some(cwd) = crate::pty::get_process_cwd(cpid)
-                    {
-                        tab.cwd = cwd;
-                    }
-
-                    let dyn_title = session.screen.dynamic_title();
-
-                    let mut is_ssh = false;
-                    if let Some(fpid) = fg_pid
-                        && child_pid != Some(fpid) && fpid > 0
-                    {
-                        let proc_name = crate::pty::get_process_name(fpid);
-                        if let Some(ref p) = proc_name {
-                            let p_trim = p.trim();
-                            is_ssh = p_trim == "ssh" || p_trim.starts_with("ssh ") || p_trim == "mosh-client";
-                        }
-                        tab.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&tab.cwd), dyn_title.as_deref());
-                    } else {
-                        tab.title = crate::pty::format_tab_title(None, Some(&tab.cwd), dyn_title.as_deref());
-                    }
-
-                    if !is_ssh && dyn_title.is_some() {
-                        session.screen.reset_dynamic_title();
-                    }
+        // 2. Throttle process name resolution only if foreground processes have NOT changed.
+        // If a process started, finished, or sent dynamic title (any_fg_changed == true),
+        // we bypass throttle completely to ensure immediate, smooth updates.
+        if !any_fg_changed {
+            if let Some(last) = self.last_title_update {
+                if now.duration_since(last) < std::time::Duration::from_millis(150) {
+                    self.has_pending_title_update = true;
+                    return false;
                 }
             }
         }
+
+        self.last_title_update = Some(now);
+        self.has_pending_title_update = false;
+
+        for session in self.tab_sessions.values_mut() {
+            session.last_foreground_pid = session.foreground_process_id();
+        }
+
+        let mut any_title_changed = any_fg_changed;
+
+        for ws in &mut self.workspace_mgr.workspaces {
+            for tab in &mut ws.tabs {
+                tab.ensure_pane_tree();
+                let active_pane_id = tab.active_pane_id();
+                let old_tab_title = tab.title.clone();
+                let old_tab_cwd = tab.cwd.clone();
+
+                let tree = tab.pane_tree.as_mut().unwrap();
+                for pane in tree.all_panes_mut() {
+                    if let Some(session) = self.tab_sessions.get_mut(&pane.id) {
+                        let fg_pid = session.last_foreground_pid;
+                        let child_pid = session.child_pid;
+
+                        // Update live cwd of the shell process
+                        if let Some(cpid) = child_pid
+                            && let Some(cwd) = crate::pty::get_process_cwd(cpid)
+                        {
+                            pane.cwd = cwd;
+                        }
+
+                        let dyn_title = session.screen.dynamic_title();
+
+                        let mut is_ssh = false;
+                        if let Some(fpid) = fg_pid
+                            && child_pid != Some(fpid) && fpid > 0
+                        {
+                            let proc_name = crate::pty::get_process_name(fpid);
+                            if let Some(ref p) = proc_name {
+                                let p_trim = p.trim();
+                                is_ssh = p_trim == "ssh" || p_trim.starts_with("ssh ") || p_trim == "mosh-client";
+                            }
+                            pane.title = crate::pty::format_tab_title(proc_name.as_deref(), Some(&pane.cwd), dyn_title.as_deref());
+                        } else {
+                            pane.title = crate::pty::format_tab_title(None, Some(&pane.cwd), dyn_title.as_deref());
+                        }
+
+                        if !is_ssh && dyn_title.is_some() {
+                            session.screen.reset_dynamic_title();
+                        }
+
+                        if pane.id == tab.id || pane.id == active_pane_id {
+                            tab.cwd = pane.cwd.clone();
+                            tab.title = pane.title.clone();
+                        }
+                    }
+                }
+
+                if tab.title != old_tab_title || tab.cwd != old_tab_cwd {
+                    any_title_changed = true;
+                }
+            }
+        }
+
+        any_title_changed
     }
 
     pub fn save_workspace_state(&mut self) {
@@ -5660,6 +5718,20 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             } else {
                 let wait_remaining = frame_dur - elapsed;
                 event_loop.set_control_flow(ControlFlow::WaitUntil(now + wait_remaining));
+            }
+        } else if self.has_running_process || self.has_pending_title_update {
+            let title_changed = self.update_tab_titles();
+            if title_changed {
+                if let Some(ref window) = self.window {
+                    window.request_redraw();
+                }
+            }
+            if self.has_running_process || self.has_pending_title_update {
+                let now = std::time::Instant::now();
+                let poll_dur = std::time::Duration::from_millis(150);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(now + poll_dur));
+            } else {
+                event_loop.set_control_flow(ControlFlow::Wait);
             }
         } else {
             event_loop.set_control_flow(ControlFlow::Wait);
