@@ -131,8 +131,28 @@ impl TermScreen {
         self.dirty = true;
     }
 
+    pub fn scroll_to_top(&mut self) {
+        self.term.scroll_display(alacritty_terminal::grid::Scroll::Top);
+        self.dirty = true;
+    }
+
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    pub fn history_size(&self) -> usize {
+        let grid = self.term.grid();
+        grid.total_lines().saturating_sub(grid.screen_lines())
+    }
+
+    pub fn scroll_to_offset(&mut self, target_offset: usize) {
+        let max_offset = self.history_size();
+        let clamped = target_offset.min(max_offset);
+        let current = self.display_offset();
+        let delta = clamped as i32 - current as i32;
+        if delta != 0 {
+            self.scroll_display(delta);
+        }
     }
 
     pub fn is_alt_screen(&self) -> bool {

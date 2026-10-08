@@ -21,6 +21,7 @@ pub struct WindowConfig {
     pub opacity: f32,
     pub padding_x: f32,
     pub padding_y: f32,
+    pub show_scrollbar: bool,
 }
 
 impl Default for WindowConfig {
@@ -32,6 +33,7 @@ impl Default for WindowConfig {
             opacity: 1.0,
             padding_x: 8.0,
             padding_y: 4.0,
+            show_scrollbar: true,
         }
     }
 }

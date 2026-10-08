@@ -8,6 +8,7 @@ fn test_default_config() {
     assert!(config.window.tabs_in_titlebar);
     assert!(config.window.hide_traffic_lights);
     assert!(config.window.decorations);
+    assert!(config.window.show_scrollbar);
     
     // macOS defaults
     assert!(config.macos.option_as_alt);

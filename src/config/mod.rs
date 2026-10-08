@@ -55,6 +55,7 @@ padding_y = 4.0
 hide_traffic_lights = true
 tabs_in_titlebar = true
 opacity = 1.0
+show_scrollbar = true
 
 [macos]
 # Treat Option key as Alt in Neovim / readline navigation

@@ -167,6 +167,16 @@ pub struct DividerDragState {
     pub bounds_h: f32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ScrollbarDragState {
+    pub pane_id: String,
+    pub drag_offset_y: f32,
+    pub track_y: f32,
+    pub track_h: f32,
+    pub thumb_h: f32,
+    pub history_lines: usize,
+}
+
 pub struct CelerApp {
     window: Option<Arc<Window>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
@@ -204,6 +214,8 @@ pub struct CelerApp {
     is_occluded: bool,
     current_surface_size: (u32, u32),
     active_divider_drag: Option<DividerDragState>,
+    active_scrollbar_drag: Option<ScrollbarDragState>,
+    hovered_scrollbar_pane_id: Option<String>,
 }
 
 impl Default for CelerApp {
@@ -340,6 +352,8 @@ impl CelerApp {
             is_occluded: false,
             current_surface_size: (0, 0),
             active_divider_drag: None,
+            active_scrollbar_drag: None,
+            hovered_scrollbar_pane_id: None,
         };
 
         if let Some(active_ws) = app.workspace_mgr.get_active_workspace() {
@@ -601,6 +615,7 @@ impl CelerApp {
         let body_y = header_h + pad_y;
         let body_h = (win_h - body_y - pad_y).max(10.0);
         let body_w = (win_w - pad_x * 2.0).max(10.0);
+        let sb_reserve = if window_config.show_scrollbar { (8.0 * scale).round() } else { 0.0 };
 
         let active_ws = match workspace_mgr.get_active_workspace() {
             Some(ws) => ws,
@@ -614,7 +629,8 @@ impl CelerApp {
         if active_tab.is_zoomed || active_tab.all_pane_ids().len() <= 1 {
             let cell_w = cell_width.max(1.0);
             let cell_h = cell_height.max(1.0);
-            let cols = (body_w / cell_w).floor().max(1.0) as usize;
+            let content_w = (body_w - sb_reserve).max(cell_w);
+            let cols = (content_w / cell_w).floor().max(1.0) as usize;
             let rows = (body_h / cell_h).floor().max(1.0) as usize;
             (
                 vec![crate::workspace::PaneRect {
@@ -640,7 +656,7 @@ impl CelerApp {
             for p in &mut panes {
                 p.pad_x = pane_pad_x;
                 p.pad_y = pane_pad_y;
-                let content_w = (p.width - 2.0 * pane_pad_x).max(cell_w);
+                let content_w = (p.width - 2.0 * pane_pad_x - sb_reserve).max(cell_w);
                 let content_h = (p.height - 2.0 * pane_pad_y).max(cell_h);
                 p.cols = (content_w / cell_w).floor().max(1.0) as usize;
                 p.rows = (content_h / cell_h).floor().max(1.0) as usize;
@@ -1954,8 +1970,25 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
-                // 2. Cursor icon update (check divider hover)
-                let (_, dividers) = self.get_current_tab_layout();
+                // 1b. Scrollbar drag scrolling
+                if let Some(ref drag) = self.active_scrollbar_drag {
+                    let my = position.y as f32;
+                    let travel = (drag.track_h - drag.thumb_h).max(1.0);
+                    let thumb_y = (my - drag.drag_offset_y).clamp(drag.track_y, drag.track_y + travel);
+                    let scroll_progress = (thumb_y - drag.track_y) / travel;
+                    let target_offset = ((1.0 - scroll_progress) * drag.history_lines as f32).round() as usize;
+
+                    if let Some(session) = self.tab_sessions.get_mut(&drag.pane_id) {
+                        session.screen.scroll_to_offset(target_offset);
+                    }
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
+                // 2. Cursor icon update (check divider hover & scrollbar hover)
+                let (panes, dividers) = self.get_current_tab_layout();
                 let mx = position.x as f32;
                 let my = position.y as f32;
                 let hovered_divider = dividers.iter().find(|div| {
@@ -1972,6 +2005,38 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     }
                 });
 
+                let mut hovered_sb_pane_id = None;
+                if self.config.window.show_scrollbar && my > header_h {
+                    for pane in &panes {
+                        if let Some(session) = self.tab_sessions.get(&pane.pane_id) {
+                            if !session.screen.is_alt_screen() {
+                                let layout = crate::window::scrollbar::calculate_scrollbar_layout(
+                                    &pane.pane_id,
+                                    pane.x,
+                                    pane.y,
+                                    pane.width,
+                                    pane.height,
+                                    session.screen.history_size(),
+                                    session.screen.size.lines,
+                                    session.screen.display_offset(),
+                                    self.scale_factor,
+                                );
+                                if layout.hit_rect.contains(mx, my) {
+                                    hovered_sb_pane_id = Some(pane.pane_id.clone());
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if hovered_sb_pane_id != self.hovered_scrollbar_pane_id {
+                    self.hovered_scrollbar_pane_id = hovered_sb_pane_id.clone();
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                }
+
                 if let Some(ref win) = self.window {
                     if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.app_menu_open {
                         win.set_cursor(CursorIcon::Default);
@@ -1980,6 +2045,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             crate::workspace::SplitDirection::Vertical => win.set_cursor(CursorIcon::ColResize),
                             crate::workspace::SplitDirection::Horizontal => win.set_cursor(CursorIcon::RowResize),
                         }
+                    } else if hovered_sb_pane_id.is_some() {
+                        win.set_cursor(CursorIcon::Default);
                     } else if (position.y as f32) > header_h {
                         win.set_cursor(CursorIcon::Text);
                     } else {
@@ -2994,6 +3061,57 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
 
+                        // 1b. Check scrollbar clicks for scrolling and dragging
+                        if button == MouseButton::Left && self.config.window.show_scrollbar {
+                            for pane in &panes {
+                                if let Some(session) = self.tab_sessions.get_mut(&pane.pane_id) {
+                                    if !session.screen.is_alt_screen() {
+                                        let layout = crate::window::scrollbar::calculate_scrollbar_layout(
+                                            &pane.pane_id,
+                                            pane.x,
+                                            pane.y,
+                                            pane.width,
+                                            pane.height,
+                                            session.screen.history_size(),
+                                            session.screen.size.lines,
+                                            session.screen.display_offset(),
+                                            self.scale_factor,
+                                        );
+
+                                        if layout.hit_rect.contains(mx, my) {
+                                            self.workspace_mgr.focus_pane(&pane.pane_id);
+
+                                            if layout.is_scrollable {
+                                                let drag_offset_y = if layout.thumb_rect.contains(mx, my) {
+                                                    my - layout.thumb_rect.y
+                                                } else {
+                                                    // Clicked track outside thumb: jump thumb to clicked position
+                                                    let travel = (layout.track_rect.height - layout.thumb_rect.height).max(1.0);
+                                                    let thumb_y = (my - layout.thumb_rect.height * 0.5).clamp(layout.track_rect.y, layout.track_rect.y + travel);
+                                                    let scroll_progress = (thumb_y - layout.track_rect.y) / travel;
+                                                    let target_offset = ((1.0 - scroll_progress) * layout.history_lines as f32).round() as usize;
+                                                    session.screen.scroll_to_offset(target_offset);
+                                                    layout.thumb_rect.height * 0.5
+                                                };
+
+                                                self.active_scrollbar_drag = Some(ScrollbarDragState {
+                                                    pane_id: pane.pane_id.clone(),
+                                                    drag_offset_y,
+                                                    track_y: layout.track_rect.y,
+                                                    track_h: layout.track_rect.height,
+                                                    thumb_h: layout.thumb_rect.height,
+                                                    history_lines: layout.history_lines,
+                                                });
+                                            }
+
+                                            window.request_redraw();
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // 2. Check pane click for focus and terminal interaction
                         let clicked_pane = panes.iter().find(|p| {
                             mx >= p.x && mx <= p.x + p.width && my >= p.y && my <= p.y + p.height
@@ -3100,6 +3218,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     if self.active_divider_drag.is_some() {
                         self.active_divider_drag = None;
                         self.save_workspace_state();
+                        window.request_redraw();
+                        return;
+                    }
+
+                    if self.active_scrollbar_drag.is_some() {
+                        self.active_scrollbar_drag = None;
                         window.request_redraw();
                         return;
                     }
@@ -4267,6 +4391,59 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                         }
 
+                        // 5. Render Vertical Scrollbar
+                        if self.config.window.show_scrollbar && !active_session.screen.is_alt_screen() {
+                            let sb = crate::window::scrollbar::calculate_scrollbar_layout(
+                                &pane_rect.pane_id,
+                                pane_rect.x,
+                                pane_rect.y,
+                                pane_rect.width,
+                                pane_rect.height,
+                                active_session.screen.history_size(),
+                                active_session.screen.size.lines,
+                                active_session.screen.display_offset(),
+                                self.scale_factor,
+                            );
+
+                            // Track background
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                sb.track_rect.x as usize,
+                                sb.track_rect.y as usize,
+                                sb.track_rect.width as usize,
+                                sb.track_rect.height as usize,
+                                0x0016161E,
+                            );
+
+                            // Thumb
+                            let is_dragging = self.active_scrollbar_drag.as_ref()
+                                .map(|d| d.pane_id == pane_rect.pane_id)
+                                .unwrap_or(false);
+                            let is_hovered = self.hovered_scrollbar_pane_id.as_deref() == Some(&pane_rect.pane_id);
+
+                            let thumb_color = if is_dragging {
+                                active_accent
+                            } else if is_hovered {
+                                0x00565F89
+                            } else if sb.is_scrollable {
+                                0x003B4261
+                            } else {
+                                0x0024283B
+                            };
+
+                            draw_scrollbar_thumb(
+                                &mut buffer,
+                                width,
+                                height,
+                                sb.thumb_rect.x as usize,
+                                sb.thumb_rect.y as usize,
+                                sb.thumb_rect.width as usize,
+                                sb.thumb_rect.height as usize,
+                                thumb_color,
+                            );
+                        }
                     }
 
                     // Draw dividers (Tokyo Night border #3b4261)
@@ -6012,6 +6189,29 @@ fn draw_outline_rect(
     TextRenderer::draw_rect(buffer, width, height, x, y + h.saturating_sub(border_width), w, border_width, color);
     TextRenderer::draw_rect(buffer, width, height, x, y, border_width, h, color);
     TextRenderer::draw_rect(buffer, width, height, x + w.saturating_sub(border_width), y, border_width, h, color);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_scrollbar_thumb(
+    buffer: &mut [u32],
+    target_width: usize,
+    target_height: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: u32,
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    if w >= 4 && h >= 6 {
+        TextRenderer::draw_rect(buffer, target_width, target_height, x + 1, y, w.saturating_sub(2), 1, color);
+        TextRenderer::draw_rect(buffer, target_width, target_height, x, y + 1, w, h.saturating_sub(2), color);
+        TextRenderer::draw_rect(buffer, target_width, target_height, x + 1, y + h - 1, w.saturating_sub(2), 1, color);
+    } else {
+        TextRenderer::draw_rect(buffer, target_width, target_height, x, y, w, h, color);
+    }
 }
 
 
