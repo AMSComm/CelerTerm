@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.25] - 2026-10-08
+
+### Fixed & Improved
+
+- **Header Bar Layout & Workspace Accent Stripe Separation**:
+  - Increased header bar height from 26px to 28px (`HEADER_HEIGHT = 28.0`), providing clear visual breathing room between tabs, the 3-line menu button (`☰`), and the workspace accent stripe.
+  - Pinned button heights (tabs, add button `+`, and menu button `☰`) strictly to 24px scaled at `y = 1px * scale`, ensuring button bottom bounds end at 25px scaled and never clip or overlap the workspace accent line (located at 26px..28px scaled).
+  - Aligned workspace indicator badge geometry (`ws_h = 20px * scale`, `ws_y = 3px * scale`) ensuring pristine vertical centering matching tab titles and menu icon.
+  - Adjusted header draw order to render the workspace accent stripe after tabs and buttons, guaranteeing the highlight line remains crisp and unclipped.
+  - Centralized titlebar height calculations across terminal grid recalculations, mouse input hit testing, divider dragging, and modal dialog positioning via `crate::window::header_bar_height`.
+
 ## [0.2.24] - 2026-10-08
 
 ### Added & Improved
