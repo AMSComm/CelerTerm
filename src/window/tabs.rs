@@ -20,6 +20,17 @@ pub struct TabHeaderLayout {
     pub menu_button_rect: Rect,
 }
 
+pub const HEADER_HEIGHT: f32 = 28.0;
+
+pub fn header_bar_height(tabs_in_titlebar: bool, scale_factor: f32) -> f32 {
+    if !tabs_in_titlebar {
+        0.0
+    } else {
+        let scale = scale_factor.max(1.0);
+        (HEADER_HEIGHT * scale).round()
+    }
+}
+
 pub fn calculate_header_layout(
     window_width: f32,
     tabs: &[(String, String)], // (id, title)
@@ -38,8 +49,10 @@ pub fn calculate_header_layout(
     }
 
     let scale = scale_factor.max(1.0);
-    // Compact, space-saving height like WezTerm (26px scaled)
-    let height = (26.0 * scale).round();
+    // Height accommodates 24px buttons plus 1px top margin and 2px accent stripe margin
+    let height = (HEADER_HEIGHT * scale).round();
+    let btn_h = (24.0 * scale).round();
+    let btn_y = (1.0 * scale).round();
     // On macOS, traffic lights take ~78-82pt from the left when visible.
     let start_x = if cfg!(target_os = "macos") && !hide_traffic_lights {
         (82.0 * scale).round()
@@ -52,9 +65,9 @@ pub fn calculate_header_layout(
     let menu_btn_x = (window_width - menu_btn_w - (8.0 * scale)).round().max(0.0);
     let menu_button_rect = Rect {
         x: menu_btn_x,
-        y: (1.0 * scale).round(),
+        y: btn_y,
         width: menu_btn_w,
-        height: height - (2.0 * scale).round(),
+        height: btn_h,
     };
 
     let available_w = (window_width - start_x - btn_width - menu_btn_w - (60.0 * scale)).max(10.0);
@@ -72,9 +85,9 @@ pub fn calculate_header_layout(
 
         let rect = Rect {
             x: current_x,
-            y: (1.0 * scale).round(),
+            y: btn_y,
             width: tab_w,
-            height: height - (2.0 * scale).round(),
+            height: btn_h,
         };
         tab_rects.push((id.clone(), rect));
         current_x += tab_w;
@@ -82,9 +95,9 @@ pub fn calculate_header_layout(
 
     let add_button_rect = Rect {
         x: current_x + (4.0 * scale).round(),
-        y: (1.0 * scale).round(),
+        y: btn_y,
         width: btn_width,
-        height: height - (2.0 * scale).round(),
+        height: btn_h,
     };
 
     TabHeaderLayout {

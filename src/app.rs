@@ -12,7 +12,7 @@ use crate::config::load_config;
 use crate::window::macos::configure_macos_window;
 #[cfg(target_os = "macos")]
 use crate::window::macos::apply_traffic_lights_visibility;
-use crate::window::tabs::calculate_header_layout;
+use crate::window::tabs::{calculate_header_layout, header_bar_height};
 use crate::workspace::WorkspaceManager;
 use crate::pty::PtySession;
 use crate::term::{TermScreen, translate_key_event_full, Modifiers, KeyAction};
@@ -427,7 +427,7 @@ impl CelerApp {
         }
 
         let scale = self.scale_factor.max(0.5);
-        let header_h = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
+        let header_h = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
         let pad_x = (self.config.window.padding_x * scale).round();
         let pad_y = (self.config.window.padding_y * scale).round();
         let term_h = (height - header_h - pad_y * 2.0).max(10.0);
@@ -609,7 +609,7 @@ impl CelerApp {
         win_h: f32,
     ) -> (Vec<crate::workspace::PaneRect>, Vec<crate::workspace::DividerRect>) {
         let scale = scale_factor.max(0.5);
-        let header_h = if window_config.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
+        let header_h = header_bar_height(window_config.tabs_in_titlebar, scale_factor);
         let pad_x = (window_config.padding_x * scale).round();
         let pad_y = (window_config.padding_y * scale).round();
         let body_y = header_h + pad_y;
@@ -730,7 +730,7 @@ impl CelerApp {
         };
 
         let scale = self.scale_factor.max(0.5);
-        let header_h = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
+        let header_h = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
         let body_h = (win_h - header_h).max(10.0);
         let cell_w = self.renderer.cell_width;
         let cell_h = self.renderer.cell_height;
@@ -1941,11 +1941,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = (position.x, position.y);
 
-                let header_h = if self.config.window.tabs_in_titlebar {
-                    (26.0 * self.scale_factor.max(1.0)).round()
-                } else {
-                    0.0
-                };
+                let header_h = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
 
                 // 1. Divider drag resizing
                 if let Some(ref drag) = self.active_divider_drag {
@@ -2303,7 +2299,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     {
                         let pane_x = target_pane.map(|p| p.content_x()).unwrap_or_else(|| (self.config.window.padding_x * self.scale_factor).round());
                         let pane_y = target_pane.map(|p| p.content_y()).unwrap_or_else(|| {
-                            let header_h = if self.config.window.tabs_in_titlebar { (26.0 * self.scale_factor).round() } else { 0.0 };
+                            let header_h = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
                             let pad_y = (self.config.window.padding_y * self.scale_factor).round();
                             header_h + pad_y
                         });
@@ -2456,7 +2452,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let modal_y = if self.tab_color_modal.anchor_x > 0.0 || self.tab_color_modal.anchor_y > 0.0 {
                             self.tab_color_modal.anchor_y.min(height - modal_h - 16.0).max(16.0)
                         } else {
-                            let h_height = if self.config.window.tabs_in_titlebar { (26.0 * scale).round() } else { 0.0 };
+                            let h_height = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
                             (h_height + (8.0 * scale)).min(height - modal_h - 16.0).max(10.0)
                         };
 
@@ -3001,9 +2997,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let ws_name = self.workspace_mgr.get_active_workspace().map(|w| w.name.as_str()).unwrap_or("Default");
                         let ws_label = format!("● {}", ws_name);
                         let ws_w = ws_label.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
-                        let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
+                        let ws_h = (20.0 * self.scale_factor).round().max(16.0);
                         let ws_x = header.menu_button_rect.x - ws_w - (8.0 * self.scale_factor);
-                        let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
+                        let ws_y = (3.0 * self.scale_factor).round();
                         let ws_rect = crate::window::tabs::Rect { x: ws_x, y: ws_y, width: ws_w, height: ws_h };
 
                         if !clicked_tab && button == MouseButton::Left && ws_rect.contains(mx, my) {
@@ -3252,7 +3248,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let pane_rect = self.get_active_pane_rect();
                             let start_x = pane_rect.as_ref().map(|p| p.content_x()).unwrap_or((self.config.window.padding_x * self.scale_factor).round());
                             let start_y = pane_rect.as_ref().map(|p| p.content_y()).unwrap_or_else(|| {
-                                let header_h = if self.config.window.tabs_in_titlebar { (26.0 * self.scale_factor.max(1.0)).round() } else { 0.0 };
+                                let header_h = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
                                 let pad_y = (self.config.window.padding_y * self.scale_factor).round();
                                 header_h + pad_y
                             });
@@ -3870,20 +3866,6 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             0x0016161E,
                         );
 
-                        // Accent stripe 2px under header with active workspace color
-                        let stripe_h = (2.0 * self.scale_factor).round().max(1.0) as usize;
-                        let stripe_y = (header.height - stripe_h as f32).max(0.0) as usize;
-                        TextRenderer::draw_rect(
-                            &mut buffer,
-                            width,
-                            height,
-                            0,
-                            stripe_y,
-                            width,
-                            stripe_h,
-                            active_accent,
-                        );
-
                         // Draw ☰ Menu Button on the far right
                         let menu_rect = header.menu_button_rect;
                         if menu_rect.width > 0.0 {
@@ -3917,9 +3899,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         // Draw Workspace Indicator badge to the left of the menu button
                         let ws_label = format!("● {}", active_ws_name);
                         let ws_w = ws_label.len() as f32 * self.renderer.cell_width + (16.0 * self.scale_factor);
-                        let ws_h = (header.height - 6.0 * self.scale_factor).max(16.0);
+                        let ws_h = (20.0 * self.scale_factor).round().max(16.0);
                         let ws_x = menu_rect.x - ws_w - (8.0 * self.scale_factor);
-                        let ws_y = ((header.height - ws_h) * 0.5).max(0.0);
+                        let ws_y = (3.0 * self.scale_factor).round();
                         if ws_x > header.add_button_rect.x + (30.0 * self.scale_factor) {
                             let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
                             let is_hovered = mx >= ws_x && mx <= ws_x + ws_w && my >= ws_y && my <= ws_y + ws_h;
@@ -4057,6 +4039,20 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             plus_y,
                             "+",
                             0x007AA2F7,
+                        );
+
+                        // Accent stripe 2px under header with active workspace color (drawn last so no tabs or buttons overlap it)
+                        let stripe_h = (2.0 * self.scale_factor).round().max(1.0) as usize;
+                        let stripe_y = (header.height - stripe_h as f32).max(0.0) as usize;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            0,
+                            stripe_y,
+                            width,
+                            stripe_h,
+                            active_accent,
                         );
                     }
 

@@ -4,7 +4,7 @@ pub mod scrollbar;
 
 pub use tabs::{
     calculate_header_layout, calculate_modal_buttons, calculate_confirm_delete_buttons, calculate_update_modal_buttons,
-    calculate_update_modal_buttons_with_label, ModalButton, Rect, TabHeaderLayout,
+    calculate_update_modal_buttons_with_label, header_bar_height, HEADER_HEIGHT, ModalButton, Rect, TabHeaderLayout,
 };
 pub use scrollbar::{calculate_scrollbar_layout, ScrollbarLayout};
 pub use macos::{
