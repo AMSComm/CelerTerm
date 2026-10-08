@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.24] - 2026-10-08
+
+### Added & Improved
+
+- **Interactive Vertical Scrollbar**:
+  - Implemented sleek, Tokyo Night-themed vertical scrollbars across single-pane and split-pane views (`#16161E` track, `#3B4261` thumb, `#565F89` hover, and active Tokyo Night accent glow during drag).
+  - Proportional thumb sizing and position based on visible terminal lines vs. total scrollback history (`visible_lines` / `total_lines`), with guaranteed minimum thumb size (`20px * scale_factor`) for effortless dragging across massive histories.
+  - Smooth interactive mouse dragging and track jump-clicking with real-time viewport scrolling.
+  - Cursor icon responsiveness (`Default` arrow icon over scrollbar, preventing accidental text selection).
+  - Reserved gutter margin (`sb_reserve`) preventing scrollbar elements from overlapping terminal text or column output.
+  - Automatically hidden in alternate screen modes (e.g. `nvim`, `htop`, `less`).
+  - Added configurable toggle `show_scrollbar = true` in `[window]` settings.
+
 ## [0.2.23] - 2026-10-07
 
 ### Fixed & Improved
