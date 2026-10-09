@@ -9,6 +9,8 @@ fn test_default_config() {
     assert!(config.window.hide_traffic_lights);
     assert!(config.window.decorations);
     assert!(config.window.show_scrollbar);
+    assert_eq!(config.window.scrollbar_mode, celerterm::config::ScrollbarMode::Autohide);
+    assert_eq!(config.window.effective_scrollbar_mode(), celerterm::config::ScrollbarMode::Autohide);
     
     // macOS defaults
     assert!(config.macos.option_as_alt);

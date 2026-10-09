@@ -12,6 +12,20 @@ pub struct Config {
     pub keybindings: HashMap<String, String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScrollbarMode {
+    Autohide,
+    Always,
+    Never,
+}
+
+impl Default for ScrollbarMode {
+    fn default() -> Self {
+        ScrollbarMode::Autohide
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WindowConfig {
@@ -22,6 +36,7 @@ pub struct WindowConfig {
     pub padding_x: f32,
     pub padding_y: f32,
     pub show_scrollbar: bool,
+    pub scrollbar_mode: ScrollbarMode,
 }
 
 impl Default for WindowConfig {
@@ -34,6 +49,17 @@ impl Default for WindowConfig {
             padding_x: 8.0,
             padding_y: 4.0,
             show_scrollbar: true,
+            scrollbar_mode: ScrollbarMode::Autohide,
+        }
+    }
+}
+
+impl WindowConfig {
+    pub fn effective_scrollbar_mode(&self) -> ScrollbarMode {
+        if !self.show_scrollbar {
+            ScrollbarMode::Never
+        } else {
+            self.scrollbar_mode
         }
     }
 }

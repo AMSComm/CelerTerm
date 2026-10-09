@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use directories::BaseDirs;
 use log::{info, warn};
 
-pub use schema::Config;
+pub use schema::{Config, ScrollbarMode};
 
 pub fn get_config_path() -> Option<PathBuf> {
     if let Some(base_dirs) = BaseDirs::new() {
@@ -56,6 +56,7 @@ hide_traffic_lights = true
 tabs_in_titlebar = true
 opacity = 1.0
 show_scrollbar = true
+scrollbar_mode = "autohide" # Options: "autohide", "always", "never"
 
 [macos]
 # Treat Option key as Alt in Neovim / readline navigation

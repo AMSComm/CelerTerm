@@ -123,3 +123,62 @@ fn test_scrollbar_drag_math() {
     let target_offset_bottom = ((1.0 - scroll_progress_bottom) * history_lines as f32).round() as usize;
     assert_eq!(target_offset_bottom, 0); // Scrolled to prompt / bottom
 }
+
+#[test]
+fn test_scrollbar_margin_and_gap() {
+    let pane_x = 0.0f32;
+    let pane_w = 500.0f32;
+    let scale = 1.0f32;
+    let layout = calculate_scrollbar_layout(
+        "pane-1",
+        pane_x,
+        0.0,
+        pane_w,
+        400.0,
+        50,
+        25,
+        0,
+        scale,
+    );
+
+    // With scale=1.0: sb_width=6.0, margin_right=1.0
+    // track_x = 0 + 500 - 6 - 1 = 493.0
+    assert_eq!(layout.track_rect.x, 493.0);
+    assert_eq!(layout.track_rect.width, 6.0);
+    // Gap from right edge is exactly 1.0
+    let right_gap = (pane_x + pane_w) - (layout.track_rect.x + layout.track_rect.width);
+    assert_eq!(right_gap, 1.0);
+}
+
+#[test]
+fn test_scrollbar_mode_configs() {
+    let default_cfg = Config::default();
+    assert_eq!(default_cfg.window.scrollbar_mode, celerterm::config::ScrollbarMode::Autohide);
+    assert_eq!(default_cfg.window.effective_scrollbar_mode(), celerterm::config::ScrollbarMode::Autohide);
+
+    let toml_always = r#"
+        [window]
+        scrollbar_mode = "always"
+    "#;
+    let cfg_always: Config = toml::from_str(toml_always).expect("Parse TOML always");
+    assert_eq!(cfg_always.window.scrollbar_mode, celerterm::config::ScrollbarMode::Always);
+    assert_eq!(cfg_always.window.effective_scrollbar_mode(), celerterm::config::ScrollbarMode::Always);
+
+    let toml_never = r#"
+        [window]
+        scrollbar_mode = "never"
+    "#;
+    let cfg_never: Config = toml::from_str(toml_never).expect("Parse TOML never");
+    assert_eq!(cfg_never.window.scrollbar_mode, celerterm::config::ScrollbarMode::Never);
+    assert_eq!(cfg_never.window.effective_scrollbar_mode(), celerterm::config::ScrollbarMode::Never);
+
+    // Backwards compatibility with show_scrollbar = false
+    let toml_compat = r#"
+        [window]
+        show_scrollbar = false
+        scrollbar_mode = "always"
+    "#;
+    let cfg_compat: Config = toml::from_str(toml_compat).expect("Parse TOML compat");
+    assert_eq!(cfg_compat.window.effective_scrollbar_mode(), celerterm::config::ScrollbarMode::Never);
+}
+

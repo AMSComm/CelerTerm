@@ -216,6 +216,7 @@ pub struct CelerApp {
     active_divider_drag: Option<DividerDragState>,
     active_scrollbar_drag: Option<ScrollbarDragState>,
     hovered_scrollbar_pane_id: Option<String>,
+    last_scrollbar_activity: std::collections::HashMap<String, std::time::Instant>,
 }
 
 impl Default for CelerApp {
@@ -354,6 +355,7 @@ impl CelerApp {
             active_divider_drag: None,
             active_scrollbar_drag: None,
             hovered_scrollbar_pane_id: None,
+            last_scrollbar_activity: std::collections::HashMap::new(),
         };
 
         if let Some(active_ws) = app.workspace_mgr.get_active_workspace() {
@@ -615,7 +617,11 @@ impl CelerApp {
         let body_y = header_h + pad_y;
         let body_h = (win_h - body_y - pad_y).max(10.0);
         let body_w = (win_w - pad_x * 2.0).max(10.0);
-        let sb_reserve = if window_config.show_scrollbar { (8.0 * scale).round() } else { 0.0 };
+        let sb_reserve = if window_config.effective_scrollbar_mode() != crate::config::schema::ScrollbarMode::Never {
+            (7.0 * scale).round()
+        } else {
+            0.0
+        };
 
         let active_ws = match workspace_mgr.get_active_workspace() {
             Some(ws) => ws,
@@ -693,6 +699,20 @@ impl CelerApp {
         let active_pane_id = active_tab.active_pane_id();
         let (panes, _) = self.get_current_tab_layout();
         panes.into_iter().find(|p| p.pane_id == active_pane_id)
+    }
+
+    pub fn is_scrollbar_visible(&self, pane_id: &str) -> bool {
+        let is_scrollable = self.tab_sessions.get(pane_id)
+            .map(|s| s.screen.history_size() > 0)
+            .unwrap_or(false);
+        check_scrollbar_visible(
+            self.config.window.effective_scrollbar_mode(),
+            is_scrollable,
+            self.active_scrollbar_drag.as_ref(),
+            self.hovered_scrollbar_pane_id.as_deref(),
+            self.last_scrollbar_activity.get(pane_id),
+            pane_id,
+        )
     }
 
     pub fn close_focused_pane(&mut self) -> bool {
@@ -1967,6 +1987,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                 // 1b. Scrollbar drag scrolling
                 if let Some(ref drag) = self.active_scrollbar_drag {
+                    self.last_scrollbar_activity.insert(drag.pane_id.clone(), std::time::Instant::now());
                     let my = position.y as f32;
                     let travel = (drag.track_h - drag.thumb_h).max(1.0);
                     let thumb_y = (my - drag.drag_offset_y).clamp(drag.track_y, drag.track_y + travel);
@@ -2001,7 +2022,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 });
 
                 let mut hovered_sb_pane_id = None;
-                if self.config.window.show_scrollbar && my > header_h {
+                if self.config.window.effective_scrollbar_mode() != crate::config::schema::ScrollbarMode::Never && my > header_h {
                     for pane in &panes {
                         if let Some(session) = self.tab_sessions.get(&pane.pane_id) {
                             if !session.screen.is_alt_screen() {
@@ -2026,6 +2047,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
 
                 if hovered_sb_pane_id != self.hovered_scrollbar_pane_id {
+                    if let Some(ref prev) = self.hovered_scrollbar_pane_id {
+                        self.last_scrollbar_activity.insert(prev.clone(), std::time::Instant::now());
+                    }
+                    if let Some(ref new_id) = hovered_sb_pane_id {
+                        self.last_scrollbar_activity.insert(new_id.clone(), std::time::Instant::now());
+                    }
                     self.hovered_scrollbar_pane_id = hovered_sb_pane_id.clone();
                     if let Some(ref win) = self.window {
                         win.request_redraw();
@@ -2326,6 +2353,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         } else {
                             // Normal shell: lines > 0 scrolls up into history (+lines), lines < 0 scrolls down to prompt (-lines)
                             session.screen.scroll_display(lines);
+                            self.last_scrollbar_activity.insert(pane_id.clone(), std::time::Instant::now());
                             if let Some(ref win) = self.window {
                                 win.request_redraw();
                             }
@@ -3057,8 +3085,11 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
 
                         // 1b. Check scrollbar clicks for scrolling and dragging
-                        if button == MouseButton::Left && self.config.window.show_scrollbar {
+                        if button == MouseButton::Left && self.config.window.effective_scrollbar_mode() != crate::config::schema::ScrollbarMode::Never {
                             for pane in &panes {
+                                if !self.is_scrollbar_visible(&pane.pane_id) {
+                                    continue;
+                                }
                                 if let Some(session) = self.tab_sessions.get_mut(&pane.pane_id) {
                                     if !session.screen.is_alt_screen() {
                                         let layout = crate::window::scrollbar::calculate_scrollbar_layout(
@@ -3074,6 +3105,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         );
 
                                         if layout.hit_rect.contains(mx, my) {
+                                            self.last_scrollbar_activity.insert(pane.pane_id.clone(), std::time::Instant::now());
                                             self.workspace_mgr.focus_pane(&pane.pane_id);
 
                                             if layout.is_scrollable {
@@ -3217,8 +3249,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         return;
                     }
 
-                    if self.active_scrollbar_drag.is_some() {
-                        self.active_scrollbar_drag = None;
+                    if let Some(drag) = self.active_scrollbar_drag.take() {
+                        self.last_scrollbar_activity.insert(drag.pane_id, std::time::Instant::now());
                         window.request_redraw();
                         return;
                     }
@@ -4387,7 +4419,15 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
 
                         // 5. Render Vertical Scrollbar
-                        if self.config.window.show_scrollbar && !active_session.screen.is_alt_screen() {
+                        let is_sb_visible = check_scrollbar_visible(
+                            self.config.window.effective_scrollbar_mode(),
+                            active_session.screen.history_size() > 0,
+                            self.active_scrollbar_drag.as_ref(),
+                            self.hovered_scrollbar_pane_id.as_deref(),
+                            self.last_scrollbar_activity.get(&pane_rect.pane_id),
+                            &pane_rect.pane_id,
+                        );
+                        if is_sb_visible && !active_session.screen.is_alt_screen() {
                             let sb = crate::window::scrollbar::calculate_scrollbar_layout(
                                 &pane_rect.pane_id,
                                 pane_rect.x,
@@ -5866,6 +5906,35 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             }
         }
 
+        // Scrollbar autohide timeout check
+        let mut scrollbar_needs_redraw = false;
+        let mut next_scrollbar_hide = None;
+        if self.config.window.effective_scrollbar_mode() == crate::config::schema::ScrollbarMode::Autohide {
+            let autohide_dur = std::time::Duration::from_millis(1500);
+            let now = std::time::Instant::now();
+            let prev_len = self.last_scrollbar_activity.len();
+            self.last_scrollbar_activity.retain(|_, time| now.duration_since(*time) < autohide_dur);
+            if self.last_scrollbar_activity.len() < prev_len {
+                scrollbar_needs_redraw = true;
+            }
+            for (_pane_id, last_time) in &self.last_scrollbar_activity {
+                let elapsed = now.duration_since(*last_time);
+                if elapsed < autohide_dur {
+                    let wake_at = now + (autohide_dur - elapsed);
+                    next_scrollbar_hide = Some(match next_scrollbar_hide {
+                        Some(prev) if prev < wake_at => prev,
+                        _ => wake_at,
+                    });
+                }
+            }
+        }
+
+        if scrollbar_needs_redraw {
+            if let Some(ref window) = self.window {
+                window.request_redraw();
+            }
+        }
+
         if self.is_occluded {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
@@ -5875,6 +5944,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             .and_then(|id| self.tab_sessions.get(&id))
             .map(|s| s.screen.dirty)
             .unwrap_or(false);
+
+        let mut target_flow = ControlFlow::Wait;
 
         if is_dirty || self.has_pending_redraw {
             let now = std::time::Instant::now();
@@ -5886,10 +5957,10 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 if let Some(ref window) = self.window {
                     window.request_redraw();
                 }
-                event_loop.set_control_flow(ControlFlow::Wait);
+                target_flow = ControlFlow::Wait;
             } else {
                 let wait_remaining = frame_dur - elapsed;
-                event_loop.set_control_flow(ControlFlow::WaitUntil(now + wait_remaining));
+                target_flow = ControlFlow::WaitUntil(now + wait_remaining);
             }
         } else if self.has_running_process || self.has_pending_title_update {
             let title_changed = self.update_tab_titles();
@@ -5901,13 +5972,23 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             if self.has_running_process || self.has_pending_title_update {
                 let now = std::time::Instant::now();
                 let poll_dur = std::time::Duration::from_millis(150);
-                event_loop.set_control_flow(ControlFlow::WaitUntil(now + poll_dur));
+                target_flow = ControlFlow::WaitUntil(now + poll_dur);
             } else {
-                event_loop.set_control_flow(ControlFlow::Wait);
+                target_flow = ControlFlow::Wait;
             }
         } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            target_flow = ControlFlow::Wait;
         }
+
+        if let Some(sb_wake) = next_scrollbar_hide {
+            target_flow = match target_flow {
+                ControlFlow::Wait => ControlFlow::WaitUntil(sb_wake),
+                ControlFlow::WaitUntil(cur_wake) => ControlFlow::WaitUntil(cur_wake.min(sb_wake)),
+                other => other,
+            };
+        }
+
+        event_loop.set_control_flow(target_flow);
     }
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.save_workspace_state();
@@ -6208,5 +6289,37 @@ fn draw_scrollbar_thumb(
         TextRenderer::draw_rect(buffer, target_width, target_height, x, y, w, h, color);
     }
 }
+
+pub fn check_scrollbar_visible(
+    mode: crate::config::schema::ScrollbarMode,
+    is_scrollable: bool,
+    active_drag: Option<&ScrollbarDragState>,
+    hovered_pane: Option<&str>,
+    last_activity: Option<&std::time::Instant>,
+    pane_id: &str,
+) -> bool {
+    match mode {
+        crate::config::schema::ScrollbarMode::Never => false,
+        crate::config::schema::ScrollbarMode::Always => true,
+        crate::config::schema::ScrollbarMode::Autohide => {
+            if !is_scrollable {
+                return false;
+            }
+            if active_drag.map(|d| d.pane_id == pane_id).unwrap_or(false) {
+                return true;
+            }
+            if hovered_pane == Some(pane_id) {
+                return true;
+            }
+            if let Some(last_time) = last_activity {
+                if last_time.elapsed() < std::time::Duration::from_millis(1500) {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+}
+
 
 

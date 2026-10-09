@@ -26,7 +26,7 @@ pub fn calculate_scrollbar_layout(
 ) -> ScrollbarLayout {
     let scale = scale_factor.max(0.5);
     let sb_width = (6.0 * scale).round().max(4.0);
-    let margin_right = (2.0 * scale).round().max(1.0);
+    let margin_right = (1.0 * scale).round().max(1.0);
     let margin_vertical = (2.0 * scale).round().max(1.0);
 
     let track_x = pane_x + pane_width - sb_width - margin_right;
