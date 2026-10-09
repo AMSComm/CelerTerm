@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.26] - 2026-10-09
+
+### Improved & Polished
+
+- **Compact Tab Bar & Header Optimization**:
+  - Reduced header bar height to 27px (`HEADER_HEIGHT = 27.0`), achieving a sleek titlebar profile while aligning seamlessly with the 2px workspace accent line without clipping or overlap.
+  - Formatted tab index without trailing whitespace (`{idx}.{title}`, e.g. `1.amktest`), saving a full monospace cell width per tab.
+  - Tightened tab inner padding from 32px to 22px scaled (`tab_text_x` offset 6px, close button margin 12px, hit area 14px), preventing tabs from expanding excessively wide.
+  - Reduced dynamic tab width clamp ceiling from 240px to 180px scaled, maintaining neat and proportional tab widths even across deep directory paths.
+
 ## [0.2.25] - 2026-10-08
 
 ### Fixed & Improved
