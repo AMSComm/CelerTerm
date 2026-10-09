@@ -20,7 +20,7 @@ pub struct TabHeaderLayout {
     pub menu_button_rect: Rect,
 }
 
-pub const HEADER_HEIGHT: f32 = 28.0;
+pub const HEADER_HEIGHT: f32 = 27.0;
 
 pub fn header_bar_height(tabs_in_titlebar: bool, scale_factor: f32) -> f32 {
     if !tabs_in_titlebar {
@@ -79,8 +79,8 @@ pub fn calculate_header_layout(
     for (id, title) in tabs {
         let text_chars = title.chars().count().max(1);
         let text_w = (text_chars as f32 * char_width).round();
-        // Dynamic width: text width + close button area & margins (32px scaled)
-        let desired_w = (text_w + (32.0 * scale).round()).clamp(50.0 * scale, 240.0 * scale);
+        // Dynamic width: text width + close button area & margins (22px scaled)
+        let desired_w = (text_w + (22.0 * scale).round()).clamp(40.0 * scale, 180.0 * scale);
         let tab_w = desired_w.min(max_per_tab);
 
         let rect = Rect {

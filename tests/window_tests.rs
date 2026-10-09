@@ -21,8 +21,8 @@ fn test_header_layout_traffic_lights_offset() {
     let layout_visible = calculate_header_layout(800.0, &tabs, false, true, 1.0, 8.0);
     let layout_hidden = calculate_header_layout(800.0, &tabs, true, true, 1.0, 8.0);
 
-    assert_eq!(layout_visible.height, 28.0);
-    assert_eq!(layout_hidden.height, 28.0);
+    assert_eq!(layout_visible.height, 27.0);
+    assert_eq!(layout_hidden.height, 27.0);
 
     // When traffic lights are hidden, tabs start much closer to the left edge
     assert_eq!(layout_hidden.tab_rects[0].1.x, 8.0);
@@ -30,7 +30,7 @@ fn test_header_layout_traffic_lights_offset() {
         assert_eq!(layout_visible.tab_rects[0].1.x, 82.0);
     }
 
-    // Verify tabs, add button, and menu button do not overlap workspace accent stripe (y = 26.0)
+    // Verify tabs, add button, and menu button do not overlap workspace accent stripe (y = 25.0)
     let stripe_y_1x = layout_visible.height - 2.0;
     assert!(layout_visible.menu_button_rect.y + layout_visible.menu_button_rect.height <= stripe_y_1x);
     assert!(layout_visible.add_button_rect.y + layout_visible.add_button_rect.height <= stripe_y_1x);
@@ -40,7 +40,7 @@ fn test_header_layout_traffic_lights_offset() {
 
     // Retina 2x scaling verification
     let layout_retina = calculate_header_layout(1600.0, &tabs, false, true, 2.0, 8.0);
-    assert_eq!(layout_retina.height, 56.0);
+    assert_eq!(layout_retina.height, 54.0);
     if cfg!(target_os = "macos") {
         assert_eq!(layout_retina.tab_rects[0].1.x, 164.0);
     }
@@ -57,9 +57,9 @@ fn test_header_layout_traffic_lights_offset() {
 fn test_header_bar_height_helper() {
     assert_eq!(header_bar_height(false, 1.0), 0.0);
     assert_eq!(header_bar_height(false, 2.0), 0.0);
-    assert_eq!(header_bar_height(true, 1.0), 28.0);
-    assert_eq!(header_bar_height(true, 2.0), 56.0);
-    assert_eq!(HEADER_HEIGHT, 28.0);
+    assert_eq!(header_bar_height(true, 1.0), 27.0);
+    assert_eq!(header_bar_height(true, 2.0), 54.0);
+    assert_eq!(HEADER_HEIGHT, 27.0);
 }
 
 #[test]

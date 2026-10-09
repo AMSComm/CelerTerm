@@ -2879,7 +2879,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         .unwrap_or_default();
                     let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
                         let truncated = crate::pty::truncate_tab_title(&t.title, crate::pty::MAX_TAB_TITLE_CHARS);
-                        (t.id.clone(), format!("{}. {}", idx + 1, truncated))
+                        (t.id.clone(), format!("{}.{}", idx + 1, truncated))
                     }).collect();
 
                     let header = calculate_header_layout(
@@ -2950,7 +2950,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         for (tab_id, rect) in &header.tab_rects {
                             if rect.contains(mx, my) {
                                 // Middle-click or clicking on 'x' at tab's right edge closes tab
-                                let close_area_w = (16.0 * self.scale_factor).max(12.0);
+                                let close_area_w = (14.0 * self.scale_factor).max(10.0);
                                 if button == MouseButton::Middle || mx >= rect.x + rect.width - close_area_w {
                                     if self.tab_sessions.len() <= 1 {
                                         self.save_workspace_state();
@@ -3837,7 +3837,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
                     let tabs: Vec<(String, String)> = raw_tabs.iter().enumerate().map(|(idx, t)| {
                         let truncated = crate::pty::truncate_tab_title(&t.title, crate::pty::MAX_TAB_TITLE_CHARS);
-                        (t.id.clone(), format!("{}. {}", idx + 1, truncated))
+                        (t.id.clone(), format!("{}.{}", idx + 1, truncated))
                     }).collect();
 
                     let active_ws_name = self.workspace_mgr.get_active_workspace()
@@ -3973,11 +3973,11 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
 
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
-                            let tab_text_x = rect.x + (8.0 * self.scale_factor);
+                            let tab_text_x = rect.x + (6.0 * self.scale_factor);
 
                             let raw_title = raw_tab.map(|t| t.title.as_str()).unwrap_or("Tab");
                             let truncated = crate::pty::truncate_tab_title(raw_title, crate::pty::MAX_TAB_TITLE_CHARS);
-                            let base_title = format!("{}. {}", idx + 1, truncated);
+                            let base_title = format!("{}.{}", idx + 1, truncated);
                             self.renderer.draw_text(
                                 &mut buffer,
                                 width,
@@ -3988,12 +3988,12 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 tab_fg,
                             );
 
-                            if rect.width > (36.0 * self.scale_factor) {
+                            if rect.width > (30.0 * self.scale_factor) {
                                 self.renderer.draw_text(
                                     &mut buffer,
                                     width,
                                     height,
-                                    rect.x + rect.width - (14.0 * self.scale_factor),
+                                    rect.x + rect.width - (12.0 * self.scale_factor),
                                     tab_text_y,
                                     "x",
                                     if is_active { 0x00787C99 } else { 0x00414868 },
