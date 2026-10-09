@@ -729,7 +729,6 @@ impl CelerApp {
             (800.0, 600.0)
         };
 
-        let scale = self.scale_factor.max(0.5);
         let header_h = header_bar_height(self.config.window.tabs_in_titlebar, self.scale_factor);
         let body_h = (win_h - header_h).max(10.0);
         let cell_w = self.renderer.cell_width;
