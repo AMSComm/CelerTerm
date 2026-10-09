@@ -5945,7 +5945,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             .map(|s| s.screen.dirty)
             .unwrap_or(false);
 
-        let mut target_flow = ControlFlow::Wait;
+        let mut target_flow;
 
         if is_dirty || self.has_pending_redraw {
             let now = std::time::Instant::now();

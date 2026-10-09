@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-09
+
+### Added & Improved
+
+- **macOS-Style Scrollbar Autohide & Margin Optimization**:
+  - Reduced scrollbar right margin from `2.0 * scale` to `1.0 * scale` (`(1.0 * scale).round().max(1.0)`), eliminating excessive right gutter gap while retaining refined rounded capsule corners.
+  - Aligned reserved text gutter `sb_reserve` from 8px to 7px scaled, matching the streamlined scrollbar footprint without text clipping.
+  - Implemented macOS-style intelligent autohide: vertical scrollbar smoothly hides when inactive and instantly appears during trackpad/mouse-wheel scrolling, mouse hover, or drag actions.
+  - Automatically times out after 1.5 seconds of inactivity with zero idle CPU overhead (`ControlFlow::Wait`).
+  - Added configurable `scrollbar_mode = "autohide" | "always" | "never"` under `[window]` settings in `config.toml`, maintaining 100% backwards compatibility with `show_scrollbar = false`.
+
 ## [0.2.26] - 2026-10-09
 
 ### Improved & Polished
