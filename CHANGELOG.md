@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-16
+
+### Fixed & Improved
+
+- **Monospace Cell Alignment & Vietnamese Text Rendering**:
+  - Pinned non-ligature alphanumeric characters, digits, and Vietnamese accented letters directly to their exact monospace grid cell coordinates (`start_x + col * cell_w`), preventing cumulative horizontal pixel drift across character cells.
+  - Resolved character overlapping and rightward jumping when typing in terminal TUIs (such as `agy` multiline prompts) using Vietnamese IME (Telex / Simple Telex).
+  - Preserved multi-character programming code ligatures (`->`, `!=`, `==`, `===`, `<=`, `>=`, `=>`, `/*`, `*/`, `::`, `..`) via dedicated ligature span grouping.
+  - Implemented zero-allocation `draw_char` and `draw_cell_cluster` using stack UTF-8 encoding with O(1) single-glyph lookup in `span_cache`.
+  - Added full support for zerowidth combining characters (NFD) in `TermScreen`.
+  - Aligned IME Preedit marked text rendering to monospace cell bounds with dynamic cursor cell background resolution.
+
+- **Refined IME Commit Logic**:
+  - Removed spurious fallback space injection on `ImeCommitAction::None`, ensuring trailing spaces are only appended when the Space key was explicitly pressed.
+
 ## [0.3.0] - 2026-10-09
 
 ### Added & Improved
