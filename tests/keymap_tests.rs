@@ -1017,14 +1017,22 @@ fn test_modified_arrow_keys_ctrl_and_shift() {
         Some(KeyAction::Bytes(b"\x1b[1;5B".to_vec()))
     );
 
-    // Shift + Arrows (text selection in editors)
+    // Shift + Arrows (text selection in terminal)
     assert_eq!(
         translate_key(&Key::Named(NamedKey::ArrowRight), shift_mods, true),
-        Some(KeyAction::Bytes(b"\x1b[1;2C".to_vec()))
+        Some(KeyAction::SelectRight)
     );
     assert_eq!(
         translate_key(&Key::Named(NamedKey::ArrowLeft), shift_mods, true),
-        Some(KeyAction::Bytes(b"\x1b[1;2D".to_vec()))
+        Some(KeyAction::SelectLeft)
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowUp), shift_mods, true),
+        Some(KeyAction::SelectUp)
+    );
+    assert_eq!(
+        translate_key(&Key::Named(NamedKey::ArrowDown), shift_mods, true),
+        Some(KeyAction::SelectDown)
     );
 }
 

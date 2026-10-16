@@ -3202,35 +3202,41 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         let grid_line = Line(l as i32 - display_offset as i32);
                                         let point = Point::new(grid_line, Column(c));
 
-                                        let now = std::time::Instant::now();
-                                        let is_multi_click = self.last_click
-                                            .map(|(t, last_pt)| {
-                                                now.duration_since(t).as_millis() < 400
-                                                    && (last_pt.line.0 - point.line.0).abs() <= 1
-                                                    && (last_pt.column.0 as i32 - point.column.0 as i32).abs() <= 2
-                                            })
-                                            .unwrap_or(false);
-
-                                        if is_multi_click {
-                                            self.click_count = (self.click_count % 3) + 1;
+                                        if self.modifiers.shift_key() {
+                                            session.screen.extend_selection_to(point, side);
+                                            self.is_selecting = true;
+                                            window.request_redraw();
                                         } else {
-                                            self.click_count = 1;
-                                        }
-                                        self.last_click = Some((now, point));
+                                            let now = std::time::Instant::now();
+                                            let is_multi_click = self.last_click
+                                                .map(|(t, last_pt)| {
+                                                    now.duration_since(t).as_millis() < 400
+                                                        && (last_pt.line.0 - point.line.0).abs() <= 1
+                                                        && (last_pt.column.0 as i32 - point.column.0 as i32).abs() <= 2
+                                                })
+                                                .unwrap_or(false);
 
-                                        let sel_type = if self.modifiers.alt_key() {
-                                            SelectionType::Block
-                                        } else {
-                                            match self.click_count {
-                                                2 => SelectionType::Semantic,
-                                                3 => SelectionType::Lines,
-                                                _ => SelectionType::Simple,
+                                            if is_multi_click {
+                                                self.click_count = (self.click_count % 3) + 1;
+                                            } else {
+                                                self.click_count = 1;
                                             }
-                                        };
+                                            self.last_click = Some((now, point));
 
-                                        session.screen.start_selection(sel_type, point, side);
-                                        self.is_selecting = true;
-                                        window.request_redraw();
+                                            let sel_type = if self.modifiers.alt_key() {
+                                                SelectionType::Block
+                                            } else {
+                                                match self.click_count {
+                                                    2 => SelectionType::Semantic,
+                                                    3 => SelectionType::Lines,
+                                                    _ => SelectionType::Simple,
+                                                }
+                                            };
+
+                                            session.screen.start_selection(sel_type, point, side);
+                                            self.is_selecting = true;
+                                            window.request_redraw();
+                                        }
                                     }
                                 }
                             }
@@ -3755,6 +3761,46 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 session.screen.scroll_to_bottom();
                                 let _ = session.write_all(text.as_bytes());
                                 let _ = session.flush();
+                            }
+                        }
+                        KeyAction::SelectLeft => {
+                            if let Some(active_id) = self.active_pane_or_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.select_left();
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::SelectRight => {
+                            if let Some(active_id) = self.active_pane_or_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.select_right();
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::SelectUp => {
+                            if let Some(active_id) = self.active_pane_or_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.select_up();
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
+                            }
+                        }
+                        KeyAction::SelectDown => {
+                            if let Some(active_id) = self.active_pane_or_tab_id()
+                                && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                            {
+                                session.screen.select_down();
+                                if let Some(ref win) = window {
+                                    win.request_redraw();
+                                }
                             }
                         }
                     }

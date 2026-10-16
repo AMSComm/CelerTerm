@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, GridCell, Row};
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionRange, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
@@ -78,6 +78,8 @@ pub struct TermScreen {
     pub size: TermSize,
     pub dirty: bool,
     pub sink: PtySink,
+    pub selection_anchor: Option<Point>,
+    pub selection_head: Option<Point>,
 }
 
 impl TermScreen {
@@ -93,6 +95,8 @@ impl TermScreen {
             size,
             dirty: true,
             sink,
+            selection_anchor: None,
+            selection_head: None,
         }
     }
 
@@ -223,11 +227,14 @@ impl TermScreen {
     }
 
     pub fn start_selection(&mut self, ty: SelectionType, point: Point, side: Side) {
+        self.selection_anchor = Some(point);
+        self.selection_head = Some(point);
         self.term.selection = Some(Selection::new(ty, point, side));
         self.dirty = true;
     }
 
     pub fn update_selection(&mut self, point: Point, side: Side) {
+        self.selection_head = Some(point);
         if let Some(ref mut sel) = self.term.selection {
             sel.update(point, side);
             self.dirty = true;
@@ -239,6 +246,223 @@ impl TermScreen {
             self.term.selection = None;
             self.dirty = true;
         }
+    }
+
+    pub fn clear_selection_and_anchor(&mut self) {
+        self.selection_anchor = None;
+        self.selection_head = None;
+        self.clear_selection();
+    }
+
+    pub fn extend_selection_to(&mut self, target_point: Point, target_side: Side) {
+        let anchor = if let Some(anchor) = self.selection_anchor {
+            anchor
+        } else if let Some(range) = self.selection_range() {
+            let cols = self.size.columns.max(1);
+            let idx_target = target_point.line.0 as i64 * cols as i64 + target_point.column.0 as i64;
+            let idx_start = range.start.line.0 as i64 * cols as i64 + range.start.column.0 as i64;
+            let idx_end = range.end.line.0 as i64 * cols as i64 + range.end.column.0 as i64;
+            if (idx_target - idx_start).abs() < (idx_target - idx_end).abs() {
+                range.end
+            } else {
+                range.start
+            }
+        } else {
+            self.term.grid().cursor.point
+        };
+
+        self.selection_anchor = Some(anchor);
+        self.selection_head = Some(target_point);
+
+        let ty = self.term.selection.as_ref().map(|s| s.ty).unwrap_or(SelectionType::Simple);
+
+        let (anchor_side, head_side) = if anchor <= target_point {
+            (Side::Left, target_side)
+        } else {
+            (Side::Right, target_side)
+        };
+
+        let mut sel = Selection::new(ty, anchor, anchor_side);
+        sel.update(target_point, head_side);
+        if anchor != target_point {
+            sel.include_all();
+        }
+        self.term.selection = Some(sel);
+        self.dirty = true;
+    }
+
+    pub fn select_right(&mut self) {
+        let is_active = self.term.selection.is_some() && self.selection_range().is_some();
+        let anchor = self.selection_anchor.unwrap_or_else(|| {
+            let cur = self.term.grid().cursor.point;
+            self.selection_anchor = Some(cur);
+            cur
+        });
+
+        if !is_active {
+            self.selection_head = Some(anchor);
+            let mut sel = Selection::new(SelectionType::Simple, anchor, Side::Left);
+            sel.update(anchor, Side::Right);
+            sel.include_all();
+            self.term.selection = Some(sel);
+            self.dirty = true;
+        } else {
+            let head = self.selection_head.unwrap_or(anchor);
+            if head < anchor {
+                let next_head = head.add(&self.term, Boundary::Grid, 1);
+                if next_head == anchor {
+                    self.clear_selection();
+                    self.selection_head = None;
+                } else {
+                    self.selection_head = Some(next_head);
+                    let mut sel = Selection::new(
+                        SelectionType::Simple,
+                        anchor.sub(&self.term, Boundary::Grid, 1),
+                        Side::Right,
+                    );
+                    sel.update(next_head, Side::Left);
+                    sel.include_all();
+                    self.term.selection = Some(sel);
+                    self.dirty = true;
+                }
+            } else {
+                let next_head = head.add(&self.term, Boundary::Grid, 1);
+                self.selection_head = Some(next_head);
+                let mut sel = Selection::new(SelectionType::Simple, anchor, Side::Left);
+                sel.update(next_head, Side::Right);
+                sel.include_all();
+                self.term.selection = Some(sel);
+                self.dirty = true;
+            }
+        }
+    }
+
+    pub fn select_left(&mut self) {
+        let is_active = self.term.selection.is_some() && self.selection_range().is_some();
+        let anchor = self.selection_anchor.unwrap_or_else(|| {
+            let cur = self.term.grid().cursor.point;
+            self.selection_anchor = Some(cur);
+            cur
+        });
+
+        if !is_active {
+            let head = anchor.sub(&self.term, Boundary::Grid, 1);
+            if head == anchor {
+                return;
+            }
+            self.selection_head = Some(head);
+            let mut sel = Selection::new(
+                SelectionType::Simple,
+                anchor.sub(&self.term, Boundary::Grid, 1),
+                Side::Right,
+            );
+            sel.update(head, Side::Left);
+            sel.include_all();
+            self.term.selection = Some(sel);
+            self.dirty = true;
+        } else {
+            let head = self.selection_head.unwrap_or(anchor);
+            if head > anchor {
+                let next_head = head.sub(&self.term, Boundary::Grid, 1);
+                if next_head == anchor {
+                    self.selection_head = Some(anchor);
+                    let mut sel = Selection::new(SelectionType::Simple, anchor, Side::Left);
+                    sel.update(anchor, Side::Right);
+                    sel.include_all();
+                    self.term.selection = Some(sel);
+                    self.dirty = true;
+                } else if next_head < anchor {
+                    self.clear_selection();
+                    self.selection_head = None;
+                } else {
+                    self.selection_head = Some(next_head);
+                    let mut sel = Selection::new(SelectionType::Simple, anchor, Side::Left);
+                    sel.update(next_head, Side::Right);
+                    sel.include_all();
+                    self.term.selection = Some(sel);
+                    self.dirty = true;
+                }
+            } else if head == anchor {
+                self.clear_selection();
+                self.selection_head = None;
+            } else {
+                let next_head = head.sub(&self.term, Boundary::Grid, 1);
+                self.selection_head = Some(next_head);
+                let mut sel = Selection::new(
+                    SelectionType::Simple,
+                    anchor.sub(&self.term, Boundary::Grid, 1),
+                    Side::Right,
+                );
+                sel.update(next_head, Side::Left);
+                sel.include_all();
+                self.term.selection = Some(sel);
+                self.dirty = true;
+            }
+        }
+    }
+
+    pub fn select_down(&mut self) {
+        let is_active = self.term.selection.is_some() && self.selection_range().is_some();
+        let anchor = self.selection_anchor.unwrap_or_else(|| {
+            let cur = self.term.grid().cursor.point;
+            self.selection_anchor = Some(cur);
+            cur
+        });
+
+        let head = if is_active {
+            self.selection_head.unwrap_or(anchor)
+        } else {
+            anchor
+        };
+
+        let next_head = Point::new(head.line + 1, head.column).grid_clamp(&self.term, Boundary::Grid);
+        if next_head == head {
+            return;
+        }
+
+        self.selection_head = Some(next_head);
+        let (anchor_side, head_side) = if anchor <= next_head {
+            (Side::Left, Side::Right)
+        } else {
+            (Side::Right, Side::Left)
+        };
+        let mut sel = Selection::new(SelectionType::Simple, anchor, anchor_side);
+        sel.update(next_head, head_side);
+        sel.include_all();
+        self.term.selection = Some(sel);
+        self.dirty = true;
+    }
+
+    pub fn select_up(&mut self) {
+        let is_active = self.term.selection.is_some() && self.selection_range().is_some();
+        let anchor = self.selection_anchor.unwrap_or_else(|| {
+            let cur = self.term.grid().cursor.point;
+            self.selection_anchor = Some(cur);
+            cur
+        });
+
+        let head = if is_active {
+            self.selection_head.unwrap_or(anchor)
+        } else {
+            anchor
+        };
+
+        let next_head = Point::new(head.line - 1, head.column).grid_clamp(&self.term, Boundary::Grid);
+        if next_head == head {
+            return;
+        }
+
+        self.selection_head = Some(next_head);
+        let (anchor_side, head_side) = if anchor <= next_head {
+            (Side::Left, Side::Right)
+        } else {
+            (Side::Right, Side::Left)
+        };
+        let mut sel = Selection::new(SelectionType::Simple, anchor, anchor_side);
+        sel.update(next_head, head_side);
+        sel.include_all();
+        self.term.selection = Some(sel);
+        self.dirty = true;
     }
 
     pub fn selection_range(&self) -> Option<SelectionRange> {

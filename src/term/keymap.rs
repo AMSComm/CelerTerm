@@ -46,6 +46,10 @@ pub enum KeyAction {
     FocusPaneUp,
     FocusPaneDown,
     ClosePane,
+    SelectLeft,
+    SelectRight,
+    SelectUp,
+    SelectDown,
 }
 
 pub fn translate_key(key: &Key, mods: Modifiers, option_as_alt: bool) -> Option<KeyAction> {
@@ -299,16 +303,16 @@ pub fn translate_key_event_full(
             }
         } else if mods.shift && !mods.alt && !mods.ctrl {
             if is_arrow_up {
-                return Some(KeyAction::Bytes(b"\x1b[1;2A".to_vec()));
+                return Some(KeyAction::SelectUp);
             }
             if is_arrow_down {
-                return Some(KeyAction::Bytes(b"\x1b[1;2B".to_vec()));
+                return Some(KeyAction::SelectDown);
             }
             if is_arrow_right {
-                return Some(KeyAction::Bytes(b"\x1b[1;2C".to_vec()));
+                return Some(KeyAction::SelectRight);
             }
             if is_arrow_left {
-                return Some(KeyAction::Bytes(b"\x1b[1;2D".to_vec()));
+                return Some(KeyAction::SelectLeft);
             }
         }
     }
@@ -586,6 +590,10 @@ pub fn parse_action_string(val: &str, app_cursor: bool) -> Option<KeyAction> {
         "focus_pane_up" => Some(KeyAction::FocusPaneUp),
         "focus_pane_down" => Some(KeyAction::FocusPaneDown),
         "close_pane" => Some(KeyAction::ClosePane),
+        "select_left" => Some(KeyAction::SelectLeft),
+        "select_right" => Some(KeyAction::SelectRight),
+        "select_up" => Some(KeyAction::SelectUp),
+        "select_down" => Some(KeyAction::SelectDown),
         "close_all_windows" | "quit_all" | "close_all" => Some(KeyAction::CloseAllWindows),
         "quit" => Some(KeyAction::Quit),
         "home" | "beginning_of_line" => {
