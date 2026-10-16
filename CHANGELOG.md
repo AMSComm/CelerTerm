@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-16
+
+### Added & Improved
+
+- **Shift + Click Selection Expansion**:
+  - Added support for extending existing text selections via Shift + Left Click.
+  - Automatically preserves the selection anchor and adjusts the nearest boundary toward the clicked cell.
+  - Allows sequential Shift + Click expansions and smooth drag continuation.
+  - Initializes selection from prior single click or active terminal cursor if no selection was currently highlighted.
+
+- **Shift + Arrow Key Selection Navigation**:
+  - Implemented keyboard-driven text selection using Shift + Arrow keys (`Shift + Left`, `Shift + Right`, `Shift + Up`, `Shift + Down`).
+  - `Shift + Right` and `Shift + Left`: expand or shrink the text selection horizontally cell-by-cell, symmetrically collapsing to empty selection when returning to the origin anchor.
+  - `Shift + Down` and `Shift + Up`: expand or shrink the selection vertically row-by-row across grid lines.
+  - Added `SelectLeft`, `SelectRight`, `SelectUp`, and `SelectDown` variants to `KeyAction` and supported `"select_left"`, `"select_right"`, `"select_up"`, `"select_down"` custom keybinding actions.
+
 ## [0.3.1] - 2026-10-16
 
 ### Fixed & Improved
