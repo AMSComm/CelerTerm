@@ -2249,10 +2249,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 self.last_ime_escape = Some(std::time::Instant::now());
                             }
                             ImeCommitAction::None => {
-                                if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
-                                    // Default fallback for Vietnamese IME commit: space key
-                                    let _ = session.write_all(b" ");
-                                }
+                                // Do NOT append fallback space. Space is only appended when
+                                // the user explicitly pressed the Space key (handled by ImeCommitAction::Append(b" ")).
                             }
                         }
                     }
@@ -4242,42 +4240,65 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     continue;
                                 }
 
-                                // D) Text & ligatures: group consecutive non-box, non-PUA, non-wide characters with identical fg/bg
-                                let start_col = col;
-                                let mut span = String::new();
-                                span.push(c);
-                                col += 1;
+                                // D) Ligatures: group consecutive ligature punctuation characters (e.g. "->", "!=", "===", "/*")
+                                if self.config.font.ligatures && is_ligature_punctuation(c) {
+                                    let next_col = col + 1;
+                                    let has_next_ligature = next_col < cols && {
+                                        let (nc, nfg, nbg) = active_session.screen.get_render_cell(next_col, line_idx);
+                                        let nfg_u32 = resolve_color(nfg, default_fg, default_bg);
+                                        let nbg_u32 = resolve_color(nbg, default_fg, default_bg);
+                                        let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
+                                        is_ligature_punctuation(nc) && nfg_u32 == fg_u32 && nbg_u32 == bg_u32
+                                    };
 
-                                while col < cols {
-                                    let (nc, nfg, nbg) = active_session.screen.get_render_cell(col, line_idx);
-                                    if nc == '\0' || nc == ' ' || TextRenderer::is_box_or_block(nc) || TextRenderer::is_nerd_font_or_pua(nc) || active_session.screen.is_wide_cell(col, line_idx) {
-                                        break;
-                                    }
-                                    let nfg_u32 = resolve_color(nfg, default_fg, default_bg);
-                                    let nbg_u32 = resolve_color(nbg, default_fg, default_bg);
-                                    let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
-                                    if nfg_u32 != fg_u32 || nbg_u32 != bg_u32 {
-                                        let prev_char = span.chars().last().unwrap_or(c);
-                                        if is_ligature_punctuation(prev_char) && is_ligature_punctuation(nc) && nbg_u32 == bg_u32 {
-                                            span.push(nc);
+                                    if has_next_ligature {
+                                        let start_col = col;
+                                        let mut lig_span = String::new();
+                                        lig_span.push(c);
+                                        col += 1;
+
+                                        while col < cols {
+                                            let (nc, nfg, nbg) = active_session.screen.get_render_cell(col, line_idx);
+                                            if !is_ligature_punctuation(nc) {
+                                                break;
+                                            }
+                                            let nfg_u32 = resolve_color(nfg, default_fg, default_bg);
+                                            let nbg_u32 = resolve_color(nbg, default_fg, default_bg);
+                                            let bg_u32 = resolve_color(bg_col, default_fg, default_bg);
+                                            if nfg_u32 != fg_u32 || nbg_u32 != bg_u32 {
+                                                break;
+                                            }
+                                            lig_span.push(nc);
                                             col += 1;
-                                            continue;
                                         }
-                                        break;
+
+                                        self.renderer.draw_text(
+                                            &mut buffer,
+                                            width,
+                                            height,
+                                            start_x + (start_col as f32) * cell_w,
+                                            y,
+                                            &lig_span,
+                                            fg_u32,
+                                        );
+                                        continue;
                                     }
-                                    span.push(nc);
-                                    col += 1;
                                 }
 
-                                self.renderer.draw_text(
+                                // E) Standard text & Vietnamese characters: render locked to exact monospace grid cell
+                                let cell_x = start_x + (col as f32) * cell_w;
+                                let (_, cell_zw, _, _) = active_session.screen.get_render_cell_cluster(col, line_idx);
+                                self.renderer.draw_cell_cluster(
                                     &mut buffer,
                                     width,
                                     height,
-                                    start_x + (start_col as f32) * cell_w,
+                                    cell_x,
                                     y,
-                                    &span,
+                                    c,
+                                    cell_zw.as_deref(),
                                     fg_u32,
                                 );
+                                col += 1;
                             }
                         }
 
@@ -4310,6 +4331,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         let preedit_cols = UnicodeWidthStr::width(preedit_text.as_str());
                                         let preedit_w = (preedit_cols as f32 * cell_w).max(cell_w);
 
+                                        let (_, _, cursor_bg_col) = active_session.screen.get_render_cell(cursor_col, cursor_row);
+                                        let preedit_bg = resolve_color(cursor_bg_col, default_fg, default_bg);
+
                                         TextRenderer::draw_rect(
                                             &mut buffer,
                                             width,
@@ -4318,18 +4342,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                             cursor_y as usize,
                                             preedit_w.ceil() as usize,
                                             cell_h.ceil() as usize,
-                                            default_bg,
+                                            preedit_bg,
                                         );
 
-                                        self.renderer.draw_text(
-                                            &mut buffer,
-                                            width,
-                                            height,
-                                            cursor_x,
-                                            cursor_y,
-                                            preedit_text,
-                                            default_fg,
-                                        );
+                                        for (i, ch) in preedit_text.chars().enumerate() {
+                                            let ch_x = cursor_x + (i as f32) * cell_w;
+                                            self.renderer.draw_char(
+                                                &mut buffer,
+                                                width,
+                                                height,
+                                                ch_x,
+                                                cursor_y,
+                                                ch,
+                                                default_fg,
+                                            );
+                                        }
 
                                         TextRenderer::draw_rect(
                                             &mut buffer,
@@ -6019,7 +6046,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[inline]
-fn is_ligature_punctuation(c: char) -> bool {
+pub fn is_ligature_punctuation(c: char) -> bool {
     matches!(c, '-' | '>' | '=' | '<' | '!' | ':' | '/' | '*' | '.' | '|' | '&' | '~' | '#' | '+' | '%' | '?' | '^' | '$')
 }
 

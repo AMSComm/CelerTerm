@@ -498,7 +498,7 @@ impl TermScreen {
         }
     }
 
-    pub fn get_render_cell(&self, col: usize, line: usize) -> (char, Color, Color) {
+    pub fn get_render_cell_cluster(&self, col: usize, line: usize) -> (char, Option<Vec<char>>, Color, Color) {
         let grid = self.term.grid();
         let display_line = Line(line as i32 - grid.display_offset() as i32);
         let cell = &grid[display_line][Column(col)];
@@ -507,6 +507,12 @@ impl TermScreen {
             ' '
         } else {
             cell.c
+        };
+
+        let zerowidth = if cell.flags.contains(Flags::HIDDEN) {
+            None
+        } else {
+            cell.zerowidth().map(|s| s.to_vec())
         };
 
         let (mut fg, bg) = if cell.flags.contains(Flags::INVERSE) {
@@ -551,6 +557,11 @@ impl TermScreen {
             }
         }
 
+        (c, zerowidth, fg, bg)
+    }
+
+    pub fn get_render_cell(&self, col: usize, line: usize) -> (char, Color, Color) {
+        let (c, _zw, fg, bg) = self.get_render_cell_cluster(col, line);
         (c, fg, bg)
     }
 }

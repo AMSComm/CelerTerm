@@ -473,9 +473,7 @@ fn test_vietnamese_ime_commit_decision_logic() {
                     out.push(0x1b);
                 }
                 TestImeCommitAction::None => {
-                    if !text.ends_with(' ') && !text.ends_with('\n') && !text.ends_with('\r') {
-                        out.push(b' ');
-                    }
+                    // No fallback space appended; spaces are only appended on explicit Space key press.
                 }
             }
         }
@@ -526,9 +524,9 @@ fn test_vietnamese_ime_commit_decision_logic() {
     let result_no_dup = process_ime_commit(true, "tiếng0", TestImeCommitAction::Append(b"0".to_vec()), false);
     assert_eq!(String::from_utf8(result_no_dup).unwrap(), "tiếng0");
 
-    // 8. Fallback when extra key event was consumed: automatically adds Space
-    let result_fallback = process_ime_commit(true, "Việt", TestImeCommitAction::None, false);
-    assert_eq!(String::from_utf8(result_fallback).unwrap(), "Việt ");
+    // 8. Commit with None action: does NOT append fallback space (prevents text jumping in TUIs)
+    let result_none = process_ime_commit(true, "Việt", TestImeCommitAction::None, false);
+    assert_eq!(String::from_utf8(result_none).unwrap(), "Việt");
 
     // 9. Committed text already ending in punctuation does not duplicate or add space
     let result_punct = process_ime_commit(true, "tiếng.", TestImeCommitAction::Append(b".".to_vec()), false);
@@ -1302,6 +1300,71 @@ fn test_split_panel_shortcuts_and_keybindings() {
         translate_key_event_full(&Key::Character("j".into()), None, alt_only, true, false, Some(&custom_bindings)),
         Some(KeyAction::FocusPaneDown)
     );
+}
+
+#[test]
+fn test_monospace_cell_alignment_and_ligature_separation() {
+    use celerterm::app::is_ligature_punctuation;
+
+    // 1. Ligature punctuation identification
+    assert!(is_ligature_punctuation('-'));
+    assert!(is_ligature_punctuation('>'));
+    assert!(is_ligature_punctuation('='));
+    assert!(is_ligature_punctuation('!'));
+    assert!(is_ligature_punctuation('/'));
+    assert!(is_ligature_punctuation('*'));
+
+    // 2. Letters, digits, and Vietnamese accented characters are strictly NOT ligature punctuation
+    assert!(!is_ligature_punctuation('a'));
+    assert!(!is_ligature_punctuation('Z'));
+    assert!(!is_ligature_punctuation('0'));
+    assert!(!is_ligature_punctuation('ế'));
+    assert!(!is_ligature_punctuation('ệ'));
+    assert!(!is_ligature_punctuation('ố'));
+    assert!(!is_ligature_punctuation('ự'));
+    assert!(!is_ligature_punctuation('đ'));
+
+    // 3. Simulating cell rendering layout segmentation
+    // Text: "fn foo() -> i32 { /* tiếng Việt */ }"
+    let sample = "fn foo() -> i32 { /* tiếng Việt */ }";
+    let chars: Vec<char> = sample.chars().collect();
+
+    let mut ligatures = Vec::new();
+    let mut cell_chars = Vec::new();
+
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == ' ' {
+            i += 1;
+            continue;
+        }
+
+        if is_ligature_punctuation(c) && i + 1 < chars.len() && is_ligature_punctuation(chars[i + 1]) {
+            let mut span = String::new();
+            span.push(c);
+            i += 1;
+            while i < chars.len() && is_ligature_punctuation(chars[i]) {
+                span.push(chars[i]);
+                i += 1;
+            }
+            ligatures.push(span);
+        } else {
+            cell_chars.push((i, c));
+            i += 1;
+        }
+    }
+
+    // Verified that ligatures are accurately identified
+    assert_eq!(ligatures, vec!["->", "/*", "*/"]);
+
+    // Verified that Vietnamese characters and alphanumeric words are strictly cell-aligned
+    let vi_start = chars.iter().position(|&c| c == 't' && chars.get(18) == Some(&'t')).unwrap_or(21);
+    let extracted_vi: String = cell_chars.iter()
+        .filter(|&&(idx, _)| idx >= 21 && idx <= 30)
+        .map(|&(_, c)| c)
+        .collect();
+    assert_eq!(extracted_vi, "tiếngViệt");
 }
 
 

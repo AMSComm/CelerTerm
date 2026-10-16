@@ -146,6 +146,56 @@ impl TextRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn draw_char(
+        &mut self,
+        target: &mut [u32],
+        target_width: usize,
+        target_height: usize,
+        start_x: f32,
+        start_y: f32,
+        c: char,
+        color: u32,
+    ) {
+        if c == ' ' || c == '\0' {
+            return;
+        }
+        let mut buf = [0u8; 4];
+        let s = c.encode_utf8(&mut buf);
+        self.draw_text(target, target_width, target_height, start_x, start_y, s, color);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_cell_cluster(
+        &mut self,
+        target: &mut [u32],
+        target_width: usize,
+        target_height: usize,
+        start_x: f32,
+        start_y: f32,
+        c: char,
+        zerowidth: Option<&[char]>,
+        color: u32,
+    ) {
+        if c == ' ' || c == '\0' {
+            return;
+        }
+        if let Some(zw) = zerowidth {
+            if !zw.is_empty() {
+                let mut cluster = String::with_capacity(4 + zw.len() * 4);
+                cluster.push(c);
+                for &z in zw {
+                    cluster.push(z);
+                }
+                self.draw_text(target, target_width, target_height, start_x, start_y, &cluster, color);
+                return;
+            }
+        }
+        let mut buf = [0u8; 4];
+        let s = c.encode_utf8(&mut buf);
+        self.draw_text(target, target_width, target_height, start_x, start_y, s, color);
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_text(
         &mut self,
         target: &mut [u32],
