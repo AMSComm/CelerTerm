@@ -218,7 +218,8 @@ impl TermScreen {
     pub fn is_wide_cell(&self, col: usize, line: usize) -> bool {
         let grid = self.term.grid();
         let display_line = Line(line as i32 - grid.display_offset() as i32);
-        if display_line < Line(0) || display_line.0 >= self.size.lines as i32 || col >= self.size.columns {
+        let min_line = -(self.history_size() as i32);
+        if display_line.0 < min_line || display_line.0 >= self.size.lines as i32 || col >= self.size.columns {
             return false;
         }
         let cell = &grid[display_line][Column(col)];
