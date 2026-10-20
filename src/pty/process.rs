@@ -300,11 +300,9 @@ pub fn get_process_name(pid: u32) -> Option<String> {
                         resolved_command = Some(child_script);
                     }
                 } else {
-                    if let Some(ref _script) = resolved_command {
-                        if !is_generic_runner(&child_name) {
-                            resolved_command = Some(child_name);
-                        }
-                    } else {
+                    // Prefer the resolved script wrapper name (e.g. "pa2Hbia") over inner child processes (e.g. "psql").
+                    // Only fallback to child process name if no script name was resolved from shell arguments.
+                    if resolved_command.is_none() && !is_generic_runner(&child_name) {
                         resolved_command = Some(child_name);
                     }
                 }

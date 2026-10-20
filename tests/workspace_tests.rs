@@ -410,6 +410,40 @@ fn test_script_wrapper_live_process_name() {
 }
 
 #[test]
+fn test_script_wrapper_preserves_custom_script_name_over_child() {
+    use celerterm::pty::get_process_name;
+    use std::process::Command;
+
+    // Create a temporary script simulating a custom wrapper like pa2Hbia that spawns a child command
+    let tmp_dir = tempdir().expect("tempdir succeeds");
+    let script_path = tmp_dir.path().join("pa2Hbia");
+    std::fs::write(&script_path, "#!/bin/sh\nwhile true; do sleep 1; done\n").expect("write script succeeds");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    let mut child = Command::new(&script_path)
+        .spawn()
+        .expect("spawn script succeeds");
+
+    // Give the child shell a brief moment to spawn its inner process
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let pid = child.id();
+    let detected_name = get_process_name(pid);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // Verify it preserves the wrapper script name "pa2Hbia" instead of overwriting with inner process
+    assert_eq!(detected_name, Some("pa2Hbia".to_string()));
+}
+
+#[test]
 fn test_scrollback_export_and_restore_cycle() {
     use celerterm::term::TermScreen;
 
