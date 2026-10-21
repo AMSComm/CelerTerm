@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] - 2026-10-21
+
+### Fixed & Improved
+
+- **Japanese & CJK IME Preedit Alignment**:
+  - Dynamically advance character cell offset using each character's full monospace width (`UnicodeWidthChar::width`) instead of fixed 1-cell increments.
+  - Eliminates overlapping, squished glyphs during Japanese/CJK unconfirmed composition in interactive CLI tools such as Claude Code.
+
+- **Nested Shell Script Wrapper Tab Title Preservation**:
+  - Prevent intermediate subshell wrappers (e.g. `psql9`, `psql`) from overwriting the outermost user-invoked wrapper script (e.g. `pa2Hbia`).
+  - Ensures accurate process identification on tabs when scripts launch child wrapper chains.
+
 ## [0.3.3] - 2026-10-20
 
 ### Fixed & Improved
