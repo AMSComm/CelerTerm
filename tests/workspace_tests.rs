@@ -444,6 +444,49 @@ fn test_script_wrapper_preserves_custom_script_name_over_child() {
 }
 
 #[test]
+fn test_nested_shell_scripts_preserve_outermost_script_name() {
+    use celerterm::pty::get_process_name;
+    use std::process::Command;
+
+    // Simulate pa2Hbia calling child shell script psql9
+    let tmp_dir = tempdir().expect("tempdir succeeds");
+    let inner_script = tmp_dir.path().join("psql9");
+    std::fs::write(&inner_script, "#!/bin/sh\nwhile true; do sleep 1; done\n").expect("write inner script");
+
+    let nested_outer = tmp_dir.path().join("pa2Hbia");
+    std::fs::write(
+        &nested_outer,
+        format!("#!/bin/sh\n{} &\nwait $!\n", inner_script.to_string_lossy()),
+    )
+    .expect("write nested outer");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&inner_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&inner_script, perms).unwrap();
+
+        let mut perms2 = std::fs::metadata(&nested_outer).unwrap().permissions();
+        perms2.set_mode(0o755);
+        std::fs::set_permissions(&nested_outer, perms2).unwrap();
+    }
+
+    let mut child = Command::new(&nested_outer)
+        .spawn()
+        .expect("spawn nested outer succeeds");
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let pid = child.id();
+    let detected_name = get_process_name(pid);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // Must preserve outermost script name "pa2Hbia" and NOT be overwritten by inner "psql9"
+    assert_eq!(detected_name, Some("pa2Hbia".to_string()));
+}
+
+#[test]
 fn test_scrollback_export_and_restore_cycle() {
     use celerterm::term::TermScreen;
 

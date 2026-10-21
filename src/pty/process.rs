@@ -293,11 +293,13 @@ pub fn get_process_name(pid: u32) -> Option<String> {
         if let Some(&child_pid) = children.first() {
             if let Some(child_name) = sys::get_raw_process_name(child_pid) {
                 if is_shell_name(&child_name) {
-                    if let Some(child_script) = sys::get_process_args(child_pid)
-                        .as_deref()
-                        .and_then(extract_command_from_shell_args)
-                    {
-                        resolved_command = Some(child_script);
+                    if resolved_command.is_none() {
+                        if let Some(child_script) = sys::get_process_args(child_pid)
+                            .as_deref()
+                            .and_then(extract_command_from_shell_args)
+                        {
+                            resolved_command = Some(child_script);
+                        }
                     }
                 } else {
                     // Prefer the resolved script wrapper name (e.g. "pa2Hbia") over inner child processes (e.g. "psql").

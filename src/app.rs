@@ -21,7 +21,7 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::SelectionType;
 use parking_lot::Mutex;
 use log::info;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImeCommitAction {
@@ -4391,8 +4391,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                             preedit_bg,
                                         );
 
-                                        for (i, ch) in preedit_text.chars().enumerate() {
-                                            let ch_x = cursor_x + (i as f32) * cell_w;
+                                        let mut col_offset = 0;
+                                        for ch in preedit_text.chars() {
+                                            let ch_x = cursor_x + (col_offset as f32) * cell_w;
                                             self.renderer.draw_char(
                                                 &mut buffer,
                                                 width,
@@ -4402,6 +4403,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                                 ch,
                                                 default_fg,
                                             );
+                                            let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+                                            col_offset += ch_w;
                                         }
 
                                         TextRenderer::draw_rect(

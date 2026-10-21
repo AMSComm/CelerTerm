@@ -636,12 +636,24 @@ fn test_escape_key_translation() {
 
 #[test]
 fn test_japanese_and_cjk_preedit_display_width() {
-    use unicode_width::UnicodeWidthStr;
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
     // Japanese Hiragana & Kanji are 2 columns wide each in terminal
     assert_eq!(UnicodeWidthStr::width("にほん"), 6);
     assert_eq!(UnicodeWidthStr::width("日本語"), 6);
     assert_eq!(UnicodeWidthStr::width("こんにちは"), 10);
+
+    // Verify per-character cell offset advance for Japanese IME composition
+    let text = "日本語";
+    let mut offsets = Vec::new();
+    let mut col_offset = 0;
+    for ch in text.chars() {
+        offsets.push((ch, col_offset));
+        let ch_w = UnicodeWidthChar::width(ch).unwrap_or(1);
+        col_offset += ch_w;
+    }
+    assert_eq!(offsets, vec![('日', 0), ('本', 2), ('語', 4)]);
+    assert_eq!(col_offset, 6);
 
     // Vietnamese accented characters are 1 column wide each
     assert_eq!(UnicodeWidthStr::width("tiếng"), 5);
