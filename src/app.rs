@@ -4272,10 +4272,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let tab_text_y = rect.y + ((rect.height - self.renderer.cell_height) * 0.5).max(0.0);
                             let tab_text_x = rect.x + (6.0 * self.scale_factor);
 
+                            let has_close_btn = rect.width > (30.0 * self.scale_factor);
+                            let close_space = if has_close_btn {
+                                14.0 * self.scale_factor
+                            } else {
+                                4.0 * self.scale_factor
+                            };
+                            let max_text_x = (rect.x + rect.width - close_space).max(rect.x);
+                            let avail_text_w = (max_text_x - tab_text_x).max(0.0);
+
                             let raw_title = raw_tab.map(|t| t.title.as_str()).unwrap_or("Tab");
-                            let truncated = crate::pty::truncate_tab_title(raw_title, crate::pty::MAX_TAB_TITLE_CHARS);
-                            let base_title = format!("{}.{}", idx + 1, truncated);
-                            self.renderer.draw_text(
+                            let base_title = crate::pty::format_tab_title_to_fit(
+                                idx,
+                                raw_title,
+                                avail_text_w,
+                                self.renderer.cell_width,
+                            );
+
+                            self.renderer.draw_text_clipped(
                                 &mut buffer,
                                 width,
                                 height,
@@ -4283,10 +4297,11 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 tab_text_y,
                                 &base_title,
                                 tab_fg,
+                                max_text_x,
                             );
 
-                            if rect.width > (30.0 * self.scale_factor) {
-                                self.renderer.draw_text(
+                            if has_close_btn {
+                                self.renderer.draw_text_clipped(
                                     &mut buffer,
                                     width,
                                     height,
@@ -4294,6 +4309,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     tab_text_y,
                                     "x",
                                     if is_active { 0x00787C99 } else { 0x00414868 },
+                                    rect.x + rect.width,
                                 );
                             }
 

@@ -151,3 +151,38 @@ fn test_firple_vn_shaping() {
     }
 }
 
+#[test]
+fn test_draw_text_clipped_pixel_boundary() {
+    let mut renderer = TextRenderer::new("Firple VN", 13.0, 1.2);
+    let target_w = 100;
+    let target_h = 40;
+    let mut buffer = vec![0u32; target_w * target_h];
+
+    // Clip at max_x = 30.0
+    let max_x = 30.0;
+    renderer.draw_text_clipped(
+        &mut buffer,
+        target_w,
+        target_h,
+        0.0,
+        5.0,
+        "very_long_tab_title_exceeding_bounds",
+        0x00FFFFFF,
+        max_x,
+    );
+
+    // Verify no pixel at x >= 30 is non-zero
+    for y in 0..target_h {
+        for x in 30..target_w {
+            let idx = y * target_w + x;
+            assert_eq!(buffer[idx], 0, "Pixel at ({}, {}) should not be modified due to clipping at max_x = {}", x, y, max_x);
+        }
+    }
+
+    // Verify some pixels in the allowed area [0..30) were actually rendered
+    let rendered_in_bounds = (0..target_h).any(|y| {
+        (0..30).any(|x| buffer[y * target_w + x] != 0)
+    });
+    assert!(rendered_in_bounds, "Expected text to render within bounds [0..30)");
+}
+

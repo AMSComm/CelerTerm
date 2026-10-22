@@ -333,6 +333,22 @@ pub fn truncate_tab_title(title: &str, max_chars: usize) -> String {
     }
 }
 
+/// Truncate tab title with index prefix to fit within `available_width` given `cell_width`.
+pub fn format_tab_title_to_fit(index: usize, title: &str, available_width: f32, cell_width: f32) -> String {
+    let prefix = format!("{}.", index + 1);
+    if cell_width <= 0.0 || available_width <= 0.0 {
+        return prefix;
+    }
+    let max_chars = (available_width / cell_width).floor() as usize;
+    let prefix_chars = prefix.chars().count();
+    if max_chars <= prefix_chars {
+        return prefix.chars().take(max_chars.max(1)).collect();
+    }
+    let budget = (max_chars - prefix_chars).min(MAX_TAB_TITLE_CHARS);
+    let truncated = truncate_tab_title(title, budget);
+    format!("{}{}", prefix, truncated)
+}
+
 pub fn format_tab_title(
     foreground_proc: Option<&str>,
     cwd: Option<&Path>,

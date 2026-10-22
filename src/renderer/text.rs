@@ -206,7 +206,31 @@ impl TextRenderer {
         text: &str,
         color: u32, // 0x00RRGGBB
     ) {
-        if text.is_empty() {
+        self.draw_text_clipped(
+            target,
+            target_width,
+            target_height,
+            start_x,
+            start_y,
+            text,
+            color,
+            target_width as f32,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_clipped(
+        &mut self,
+        target: &mut [u32],
+        target_width: usize,
+        target_height: usize,
+        start_x: f32,
+        start_y: f32,
+        text: &str,
+        color: u32, // 0x00RRGGBB
+        max_x: f32,
+    ) {
+        if text.is_empty() || start_x >= max_x {
             return;
         }
 
@@ -298,11 +322,16 @@ impl TextRenderer {
 
         let start_x_i = start_x.round() as i32;
         let start_y_i = start_y.round() as i32;
+        let max_x_i = max_x.round() as i32;
 
         if let Some(cached_glyphs) = self.span_cache.get(text) {
             for glyph in cached_glyphs {
                 let gx_base = start_x_i + glyph.rel_x;
                 let gy_base = start_y_i + glyph.rel_y;
+
+                if gx_base >= max_x_i {
+                    continue;
+                }
 
                 if let Some(image) = self.swash_cache.get_image(&mut self.font_system, glyph.cache_key) {
                     let gx = gx_base + image.placement.left;
@@ -321,7 +350,7 @@ impl TextRenderer {
 
                                 for ix in 0..img_w {
                                     let px = gx + ix as i32;
-                                    if px < 0 || (px as usize) >= target_width {
+                                    if px < 0 || (px as usize) >= target_width || px >= max_x_i {
                                         continue;
                                     }
 
@@ -358,7 +387,7 @@ impl TextRenderer {
 
                                 for ix in 0..img_w {
                                     let px = gx + ix as i32;
-                                    if px < 0 || (px as usize) >= target_width {
+                                    if px < 0 || (px as usize) >= target_width || px >= max_x_i {
                                         continue;
                                     }
 

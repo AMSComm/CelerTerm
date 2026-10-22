@@ -305,6 +305,45 @@ fn test_tab_title_truncation_20_chars() {
 }
 
 #[test]
+fn test_format_tab_title_to_fit_dynamic_bounds() {
+    use celerterm::pty::format_tab_title_to_fit;
+
+    let cell_w = 10.0;
+
+    // Available width = 200px -> max 20 chars
+    // prefix is "1." (2 chars), budget = 18 chars
+    let title = "my_project_repo";
+    let res = format_tab_title_to_fit(0, title, 200.0, cell_w);
+    assert_eq!(res, "1.my_project_repo");
+
+    // Very long title in 200px: budget is 18 chars, "very_long_project_name_test" -> "very_long_project…" (18 chars)
+    let long_title = "very_long_project_name_test";
+    let res_long = format_tab_title_to_fit(0, long_title, 200.0, cell_w);
+    assert_eq!(res_long, "1.very_long_project…");
+    assert_eq!(res_long.chars().count(), 20);
+
+    // Narrow tab: available width = 80px -> max 8 chars
+    // prefix is "1." (2 chars), budget = 6 chars -> "very_…"
+    let res_narrow = format_tab_title_to_fit(0, long_title, 80.0, cell_w);
+    assert_eq!(res_narrow, "1.very_…");
+    assert_eq!(res_narrow.chars().count(), 8);
+
+    // Index >= 9: prefix is "10." (3 chars)
+    // Available width = 80px -> max 8 chars, budget = 5 chars -> "very…"
+    let res_idx10 = format_tab_title_to_fit(9, long_title, 80.0, cell_w);
+    assert_eq!(res_idx10, "10.very…");
+    assert_eq!(res_idx10.chars().count(), 8);
+
+    // Sub-threshold available width (e.g. only 20px -> max 2 chars)
+    let res_tiny = format_tab_title_to_fit(0, long_title, 20.0, cell_w);
+    assert_eq!(res_tiny, "1.");
+
+    // Zero or negative width
+    assert_eq!(format_tab_title_to_fit(0, long_title, 0.0, cell_w), "1.");
+    assert_eq!(format_tab_title_to_fit(0, long_title, -10.0, cell_w), "1.");
+}
+
+#[test]
 fn test_shell_script_and_wrapper_title_extraction() {
     use celerterm::pty::{extract_command_from_shell_args, is_generic_runner, is_shell_name};
 
