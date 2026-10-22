@@ -1,7 +1,7 @@
 use alacritty_terminal::index::{Column, Line};
 use celerterm::term::{
     TermScreen, SearchState, MatchHighlightType,
-    find_matches, calculate_scroll_offset_for_line,
+    find_matches, find_matches_with_cap, calculate_scroll_offset_for_line,
 };
 use celerterm::window::{calculate_search_bar_layout, Rect};
 
@@ -169,4 +169,59 @@ fn test_search_bar_layout() {
     assert!(layout.container.contains(layout.next_btn.x, layout.next_btn.y));
     assert!(layout.container.contains(layout.prev_btn.x, layout.prev_btn.y));
     assert!(layout.container.contains(layout.input_box.x, layout.input_box.y));
+}
+
+#[test]
+fn test_search_matches_for_line() {
+    let mut screen = TermScreen::new(80, 24);
+    screen.process_bytes(b"hello world\r\nfoo hello bar hello\r\nthird line\r\nhello end\r\n");
+
+    let mut state = SearchState::new();
+    state.open();
+    state.set_query("hello".to_string(), &screen);
+
+    // Line 0 has 1 "hello"
+    let line0_matches = state.matches_for_line(Line(0));
+    assert_eq!(line0_matches.len(), 1);
+    assert_eq!(line0_matches[0].start_col, 0);
+    assert_eq!(line0_matches[0].end_col, 5);
+
+    // Line 1 has 2 "hello"s
+    let line1_matches = state.matches_for_line(Line(1));
+    assert_eq!(line1_matches.len(), 2);
+    assert_eq!(line1_matches[0].start_col, 4);
+    assert_eq!(line1_matches[0].end_col, 9);
+    assert_eq!(line1_matches[1].start_col, 14);
+    assert_eq!(line1_matches[1].end_col, 19);
+
+    // Line 2 has 0 "hello"s
+    let line2_matches = state.matches_for_line(Line(2));
+    assert!(line2_matches.is_empty());
+
+    // Line 3 has 1 "hello"
+    let line3_matches = state.matches_for_line(Line(3));
+    assert_eq!(line3_matches.len(), 1);
+    assert_eq!(line3_matches[0].start_col, 0);
+    assert_eq!(line3_matches[0].end_col, 5);
+}
+
+#[test]
+fn test_search_capping_max_matches() {
+    let mut screen = TermScreen::new(80, 30);
+    for i in 0..20 {
+        screen.process_bytes(format!("test line {}\r\n", i).as_bytes());
+    }
+
+    // Cap at 5 matches
+    let (matches, is_capped) = find_matches_with_cap(&screen, "test", 5);
+    assert_eq!(matches.len(), 5);
+    assert!(is_capped);
+
+    let mut state = SearchState::new();
+    state.open();
+    state.matches = matches;
+    state.is_capped = is_capped;
+    state.current_match_idx = Some(0);
+
+    assert_eq!(state.match_counter_string(), "1/5+");
 }

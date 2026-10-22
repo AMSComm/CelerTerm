@@ -2,6 +2,8 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::grid::Dimensions;
 use crate::term::TermScreen;
 
+pub const MAX_SEARCH_MATCHES: usize = 5000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchHighlightType {
     Normal,
@@ -21,6 +23,7 @@ pub struct SearchState {
     pub query: String,
     pub matches: Vec<SearchMatch>,
     pub current_match_idx: Option<usize>,
+    pub is_capped: bool,
 }
 
 impl SearchState {
@@ -37,6 +40,7 @@ impl SearchState {
         self.query.clear();
         self.matches.clear();
         self.current_match_idx = None;
+        self.is_capped = false;
     }
 
     pub fn toggle(&mut self) {
@@ -56,10 +60,14 @@ impl SearchState {
         if self.query.is_empty() {
             self.matches.clear();
             self.current_match_idx = None;
+            self.is_capped = false;
             return;
         }
 
-        self.matches = find_matches(screen, &self.query);
+        let (matches, is_capped) = find_matches_with_cap(screen, &self.query, MAX_SEARCH_MATCHES);
+        self.matches = matches;
+        self.is_capped = is_capped;
+
         if self.matches.is_empty() {
             self.current_match_idx = None;
         } else {
@@ -110,6 +118,16 @@ impl SearchState {
         self.matches.get(prev_idx)
     }
 
+    /// O(log N) slice lookup for all matches on a specific line.
+    pub fn matches_for_line(&self, line: Line) -> &[SearchMatch] {
+        if self.matches.is_empty() {
+            return &[];
+        }
+        let start = self.matches.partition_point(|m| m.line.0 < line.0);
+        let len = self.matches[start..].partition_point(|m| m.line.0 == line.0);
+        &self.matches[start..start + len]
+    }
+
     /// Check if a cell at (line, col) is part of any match, returning highlight type if matched.
     pub fn check_cell_highlight(&self, line: Line, col: usize) -> Option<MatchHighlightType> {
         if !self.is_open || self.matches.is_empty() {
@@ -123,9 +141,10 @@ impl SearchState {
             }
         }
 
-        // Check if point falls within any other match
-        for m in &self.matches {
-            if m.line == line && col >= m.start_col && col < m.end_col {
+        // Check if point falls within matches for this line using O(log N) partition lookup
+        let row_matches = self.matches_for_line(line);
+        for m in row_matches {
+            if col >= m.start_col && col < m.end_col {
                 return Some(MatchHighlightType::Normal);
             }
         }
@@ -139,14 +158,15 @@ impl SearchState {
         Some(calculate_scroll_offset_for_line(m.line, visible_lines, history_size))
     }
 
-    /// Format counter string e.g. "1/14" or "0/0"
+    /// Format counter string e.g. "1/14", "1/5000+" or "0/0"
     pub fn match_counter_string(&self) -> String {
         let total = self.matches.len();
+        let cap_suffix = if self.is_capped { "+" } else { "" };
         if total == 0 {
             "0/0".to_string()
         } else {
             let current = self.current_match_idx.map(|idx| idx + 1).unwrap_or(0);
-            format!("{}/{}", current, total)
+            format!("{}/{}{}", current, total, cap_suffix)
         }
     }
 }
@@ -161,8 +181,12 @@ pub fn calculate_scroll_offset_for_line(line: Line, visible_lines: usize, histor
 }
 
 pub fn find_matches(screen: &TermScreen, query: &str) -> Vec<SearchMatch> {
+    find_matches_with_cap(screen, query, MAX_SEARCH_MATCHES).0
+}
+
+pub fn find_matches_with_cap(screen: &TermScreen, query: &str, max_matches: usize) -> (Vec<SearchMatch>, bool) {
     if query.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     let grid = screen.term.grid();
@@ -174,21 +198,29 @@ pub fn find_matches(screen: &TermScreen, query: &str) -> Vec<SearchMatch> {
     let query_lower = query.to_lowercase();
     let query_char_count = query_lower.chars().count();
     if query_char_count == 0 {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     let mut matches = Vec::new();
     let min_line = -(history_lines as i32);
     let max_line = visible_lines as i32;
 
-    for l in min_line..max_line {
+    // Reusable buffers across lines to avoid heap allocations in inner loop
+    let mut char_cols: Vec<(char, usize, usize)> = Vec::with_capacity(cols);
+    let mut row_str = String::with_capacity(cols);
+    let mut row_lower = String::with_capacity(cols);
+    let mut char_byte_indices: Vec<(usize, char)> = Vec::with_capacity(cols);
+    let mut is_capped = false;
+
+    'outer: for l in min_line..max_line {
         let line_idx = Line(l);
         let row = &grid[line_idx];
 
-        let mut char_cols: Vec<(char, usize, usize)> = Vec::with_capacity(cols);
-        let mut row_str = String::with_capacity(cols);
+        char_cols.clear();
+        row_str.clear();
 
         let mut c = 0;
+        let mut has_non_space = false;
         while c < cols {
             let cell = &row[Column(c)];
             if cell.flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER) {
@@ -197,6 +229,9 @@ pub fn find_matches(screen: &TermScreen, query: &str) -> Vec<SearchMatch> {
             }
 
             let ch = if cell.c == '\0' { ' ' } else { cell.c };
+            if ch != ' ' {
+                has_non_space = true;
+            }
             let is_wide = cell.flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR);
             let span = if is_wide { 2 } else { 1 };
 
@@ -206,12 +241,19 @@ pub fn find_matches(screen: &TermScreen, query: &str) -> Vec<SearchMatch> {
             c += span;
         }
 
-        if row_str.trim_end().is_empty() {
+        if !has_non_space {
             continue;
         }
 
-        let row_lower = row_str.to_lowercase();
-        let char_byte_indices: Vec<(usize, char)> = row_lower.char_indices().collect();
+        row_lower.clear();
+        for ch in row_str.chars() {
+            for lc in ch.to_lowercase() {
+                row_lower.push(lc);
+            }
+        }
+
+        char_byte_indices.clear();
+        char_byte_indices.extend(row_lower.char_indices());
 
         for (byte_idx, _) in row_lower.match_indices(&query_lower) {
             if let Some(start_char_idx) = char_byte_indices.iter().position(|&(b, _)| b == byte_idx) {
@@ -224,10 +266,14 @@ pub fn find_matches(screen: &TermScreen, query: &str) -> Vec<SearchMatch> {
                         start_col,
                         end_col,
                     });
+                    if matches.len() >= max_matches {
+                        is_capped = true;
+                        break 'outer;
+                    }
                 }
             }
         }
     }
 
-    matches
+    (matches, is_capped)
 }
