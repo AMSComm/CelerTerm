@@ -13,9 +13,10 @@ use crate::window::macos::configure_macos_window;
 #[cfg(target_os = "macos")]
 use crate::window::macos::apply_traffic_lights_visibility;
 use crate::window::tabs::{calculate_header_layout, header_bar_height};
+use crate::window::search::calculate_search_bar_layout;
 use crate::workspace::WorkspaceManager;
 use crate::pty::PtySession;
-use crate::term::{TermScreen, translate_key_event_full, Modifiers, KeyAction};
+use crate::term::{TermScreen, translate_key_event_full, Modifiers, KeyAction, SearchState, MatchHighlightType};
 use crate::renderer::{TextRenderer, parse_hex_color, resolve_color};
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::SelectionType;
@@ -185,6 +186,7 @@ pub struct CelerApp {
     workspace_modal: WorkspaceModalState,
     update_modal: UpdateModalState,
     tab_color_modal: TabColorModalState,
+    pub search_state: SearchState,
     app_menu_open: bool,
     pub tab_sessions: HashMap<String, TabSession>,
     renderer: TextRenderer,
@@ -324,6 +326,7 @@ impl CelerApp {
             workspace_modal: WorkspaceModalState::default(),
             update_modal: UpdateModalState::default(),
             tab_color_modal: TabColorModalState::default(),
+            search_state: SearchState::new(),
             app_menu_open: false,
             tab_sessions: HashMap::new(),
             renderer,
@@ -1574,6 +1577,165 @@ impl CelerApp {
         }
     }
 
+    pub fn toggle_search(&mut self) {
+        if self.search_state.is_open {
+            self.search_state.close();
+        } else {
+            // Pre-populate with selection if available
+            if let Some(active_id) = self.active_pane_or_tab_id() {
+                if let Some(session) = self.tab_sessions.get(&active_id) {
+                    if let Some(sel) = session.screen.copy_selection_text() {
+                        let first_line = sel.lines().next().unwrap_or("").trim().to_string();
+                        if !first_line.is_empty() && first_line.len() <= 100 {
+                            self.search_state.query = first_line;
+                        }
+                    }
+                }
+            }
+            self.search_state.open();
+            if let Some(active_id) = self.active_pane_or_tab_id() {
+                if let Some(session) = self.tab_sessions.get_mut(&active_id) {
+                    self.search_state.update_matches(&session.screen);
+                    if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                        session.screen.scroll_to_offset(offset);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn search_next_match(&mut self) {
+        if !self.search_state.is_open {
+            self.toggle_search();
+            return;
+        }
+        if let Some(active_id) = self.active_pane_or_tab_id() {
+            if let Some(session) = self.tab_sessions.get_mut(&active_id) {
+                self.search_state.next_match();
+                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                    session.screen.scroll_to_offset(offset);
+                }
+            }
+        }
+    }
+
+    pub fn search_prev_match(&mut self) {
+        if !self.search_state.is_open {
+            self.toggle_search();
+            return;
+        }
+        if let Some(active_id) = self.active_pane_or_tab_id() {
+            if let Some(session) = self.tab_sessions.get_mut(&active_id) {
+                self.search_state.prev_match();
+                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                    session.screen.scroll_to_offset(offset);
+                }
+            }
+        }
+    }
+
+    fn handle_search_key(&mut self, key: &winit::keyboard::Key, code: Option<winit::keyboard::KeyCode>) {
+        let is_shift = self.modifiers.shift_key();
+        let is_ctrl_or_cmd = self.modifiers.super_key() || self.modifiers.control_key();
+
+        match key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                self.search_state.close();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter) => {
+                if is_shift {
+                    self.search_prev_match();
+                } else {
+                    self.search_next_match();
+                }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                self.search_next_match();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                self.search_prev_match();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
+                self.search_state.query.pop();
+                if let Some(active_id) = self.active_pane_or_tab_id() {
+                    if let Some(session) = self.tab_sessions.get_mut(&active_id) {
+                        self.search_state.update_matches(&session.screen);
+                        if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                            session.screen.scroll_to_offset(offset);
+                        }
+                    }
+                }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::F3) => {
+                if is_shift {
+                    self.search_prev_match();
+                } else {
+                    self.search_next_match();
+                }
+            }
+            winit::keyboard::Key::Character(s) => {
+                if is_ctrl_or_cmd {
+                    match s.as_str() {
+                        "f" | "F" => {
+                            self.search_state.close();
+                        }
+                        "g" | "G" => {
+                            if is_shift {
+                                self.search_prev_match();
+                            } else {
+                                self.search_next_match();
+                            }
+                        }
+                        "w" | "W" => {
+                            self.search_state.close();
+                        }
+                        "v" | "V" => {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                if let Ok(text) = clipboard.get_text() {
+                                    let clean: String = text.chars().filter(|c| !c.is_control() || *c == ' ').take(100).collect();
+                                    self.search_state.query.push_str(&clean);
+                                    if let Some(active_id) = self.active_pane_or_tab_id() {
+                                        if let Some(session) = self.tab_sessions.get_mut(&active_id) {
+                                            self.search_state.update_matches(&session.screen);
+                                            if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                                                session.screen.scroll_to_offset(offset);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        "c" | "C" => {
+                            if !self.search_state.query.is_empty() {
+                                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                    let _ = clipboard.set_text(&self.search_state.query);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                } else {
+                    self.search_state.query.push_str(s);
+                    if let Some(active_id) = self.active_pane_or_tab_id() {
+                        if let Some(session) = self.tab_sessions.get_mut(&active_id) {
+                            self.search_state.update_matches(&session.screen);
+                            if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                                session.screen.scroll_to_offset(offset);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some(c) = code {
+                    if c == winit::keyboard::KeyCode::Escape {
+                        self.search_state.close();
+                    }
+                }
+            }
+        }
+    }
+
     pub fn start_check_for_updates(&mut self) {
         self.update_modal.is_open = true;
         self.update_modal.state = crate::update::UpdateState::Checking;
@@ -2370,6 +2532,29 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
 
                     if state == ElementState::Pressed {
+                        if self.search_state.is_open && button == MouseButton::Left {
+                            if let Some(target_pane) = self.get_active_pane_rect() {
+                                let rect = crate::window::Rect {
+                                    x: target_pane.x,
+                                    y: target_pane.y,
+                                    width: target_pane.width,
+                                    height: target_pane.height,
+                                };
+                                let layout = calculate_search_bar_layout(rect, self.scale_factor);
+                                if layout.container.contains(mx, my) {
+                                    if layout.close_btn.contains(mx, my) {
+                                        self.search_state.close();
+                                    } else if layout.prev_btn.contains(mx, my) {
+                                        self.search_prev_match();
+                                    } else if layout.next_btn.contains(mx, my) {
+                                        self.search_next_match();
+                                    }
+                                    window.request_redraw();
+                                    return;
+                                }
+                            }
+                        }
+
                         if self.update_modal.is_open {
                         if button == MouseButton::Left {
                             let (width, height) = (size.width as f32, size.height as f32);
@@ -3358,6 +3543,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
+                if self.search_state.is_open {
+                    self.handle_search_key(&logical_key, match physical_key {
+                        PhysicalKey::Code(c) => Some(c),
+                        _ => None,
+                    });
+                    if let Some(ref win) = window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 let is_escape_key = matches!(logical_key, winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape))
                     || matches!(logical_key, winit::keyboard::Key::Character(ref s) if s == "\x1b")
                     || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Escape));
@@ -3633,6 +3829,24 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                         KeyAction::CheckForUpdates => {
                             self.start_check_for_updates();
+                        }
+                        KeyAction::ToggleSearch => {
+                            self.toggle_search();
+                            if let Some(ref win) = window {
+                                win.request_redraw();
+                            }
+                        }
+                        KeyAction::FindNext => {
+                            self.search_next_match();
+                            if let Some(ref win) = window {
+                                win.request_redraw();
+                            }
+                        }
+                        KeyAction::FindPrevious => {
+                            self.search_prev_match();
+                            if let Some(ref win) = window {
+                                win.request_redraw();
+                            }
                         }
                         KeyAction::SelectTab(idx) => {
                             if let Ok(tab_id) = self.workspace_mgr.select_tab_by_1_index(idx) {
@@ -4186,6 +4400,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             for col in 0..cols {
                                 let point = Point::new(grid_line, Column(col));
                                 let is_selected = selection_range.as_ref().map(|sr| sr.contains(point)).unwrap_or(false);
+                                let search_hl = if is_focused { self.search_state.check_cell_highlight(grid_line, col) } else { None };
 
                                 if is_selected {
                                     TextRenderer::draw_rect(
@@ -4197,6 +4412,21 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                         cell_w.ceil() as usize,
                                         cell_h.ceil() as usize,
                                         selection_bg_u32,
+                                    );
+                                } else if let Some(hl) = search_hl {
+                                    let hl_bg = match hl {
+                                        MatchHighlightType::Active => 0x00FF9E3B,
+                                        MatchHighlightType::Normal => 0x006B520E,
+                                    };
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        (start_x + (col as f32) * cell_w) as usize,
+                                        y as usize,
+                                        cell_w.ceil() as usize,
+                                        cell_h.ceil() as usize,
+                                        hl_bg,
                                     );
                                 } else {
                                     let (_c, _fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
@@ -4223,11 +4453,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if y + cell_h > (pane_rect.y + pane_rect.height).min(height as f32) {
                                 break;
                             }
+                            let grid_line = Line(line_idx as i32 - display_offset as i32);
 
                             let mut col = 0;
                             while col < cols {
                                 let (c, fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
-                                let fg_u32 = resolve_color(fg_col, default_fg, default_bg);
+                                let is_active_search_match = is_focused && self.search_state.check_cell_highlight(grid_line, col) == Some(MatchHighlightType::Active);
+                                let fg_u32 = if is_active_search_match {
+                                    0x001A1B26
+                                } else {
+                                    resolve_color(fg_col, default_fg, default_bg)
+                                };
 
                                 if c == '\0' || c == ' ' {
                                     col += 1;
@@ -4583,6 +4819,180 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     active_accent,
                                 );
                             }
+                        }
+                    }
+
+                    // Render floating search bar on top of the focused pane if search is active
+                    if self.search_state.is_open {
+                        if let Some(target_pane) = panes_to_render.iter().find(|p| p.pane_id == active_focused_pane_id) {
+                            let rect = crate::window::Rect {
+                                x: target_pane.x,
+                                y: target_pane.y,
+                                width: target_pane.width,
+                                height: target_pane.height,
+                            };
+                            let layout = calculate_search_bar_layout(rect, self.scale_factor);
+
+                            // 1. Container background (#1F2335) & Border (#3B4261)
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.container.x as usize,
+                                layout.container.y as usize,
+                                layout.container.width as usize,
+                                layout.container.height as usize,
+                                0x001F2335,
+                            );
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (layout.container.x as usize, layout.container.y as usize, layout.container.width as usize, layout.container.height as usize),
+                                1,
+                                0x003B4261,
+                            );
+
+                            // 2. Input box background (#16161E) & Border (#2F3549)
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.input_box.x as usize,
+                                layout.input_box.y as usize,
+                                layout.input_box.width as usize,
+                                layout.input_box.height as usize,
+                                0x0016161E,
+                            );
+                            draw_outline_rect(
+                                &mut buffer,
+                                (width, height),
+                                (layout.input_box.x as usize, layout.input_box.y as usize, layout.input_box.width as usize, layout.input_box.height as usize),
+                                1,
+                                0x002F3549,
+                            );
+
+                            let text_y = layout.input_box.y + ((layout.input_box.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            let text_x = layout.input_box.x + (4.0 * self.scale_factor);
+
+                            if self.search_state.query.is_empty() {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    text_x,
+                                    text_y,
+                                    "Find in terminal...",
+                                    0x00565F89,
+                                );
+                            } else {
+                                self.renderer.draw_text(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    text_x,
+                                    text_y,
+                                    &self.search_state.query,
+                                    0x00C0CAF5,
+                                );
+                                let cursor_x = text_x + (self.search_state.query.chars().count() as f32 * self.renderer.cell_width);
+                                if cursor_x + 2.0 <= layout.input_box.x + layout.input_box.width {
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        cursor_x as usize,
+                                        (layout.input_box.y + 2.0) as usize,
+                                        2,
+                                        (layout.input_box.height - 4.0).max(1.0) as usize,
+                                        0x007AA2F7,
+                                    );
+                                }
+                            }
+
+                            // 3. Counter box
+                            let counter_str = self.search_state.match_counter_string();
+                            let counter_color = if self.search_state.matches.is_empty() && !self.search_state.query.is_empty() {
+                                0x00F7768E
+                            } else if !self.search_state.matches.is_empty() {
+                                0x009ECE6A
+                            } else {
+                                0x00565F89
+                            };
+                            let counter_text_y = layout.counter_box.y + ((layout.counter_box.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.counter_box.x,
+                                counter_text_y,
+                                &counter_str,
+                                counter_color,
+                            );
+
+                            // 4. Prev Button [▲]
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.prev_btn.x as usize,
+                                layout.prev_btn.y as usize,
+                                layout.prev_btn.width as usize,
+                                layout.prev_btn.height as usize,
+                                0x0024283B,
+                            );
+                            let btn_text_y = layout.prev_btn.y + ((layout.prev_btn.height - self.renderer.cell_height) * 0.5).max(0.0);
+                            let btn_offset_x = ((layout.prev_btn.width - self.renderer.cell_width) * 0.5).max(0.0);
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.prev_btn.x + btn_offset_x,
+                                btn_text_y,
+                                "▲",
+                                0x00A9B1D6,
+                            );
+
+                            // 5. Next Button [▼]
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.next_btn.x as usize,
+                                layout.next_btn.y as usize,
+                                layout.next_btn.width as usize,
+                                layout.next_btn.height as usize,
+                                0x0024283B,
+                            );
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.next_btn.x + btn_offset_x,
+                                btn_text_y,
+                                "▼",
+                                0x00A9B1D6,
+                            );
+
+                            // 6. Close Button [✕]
+                            TextRenderer::draw_rect(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.close_btn.x as usize,
+                                layout.close_btn.y as usize,
+                                layout.close_btn.width as usize,
+                                layout.close_btn.height as usize,
+                                0x0024283B,
+                            );
+                            self.renderer.draw_text(
+                                &mut buffer,
+                                width,
+                                height,
+                                layout.close_btn.x + btn_offset_x,
+                                btn_text_y,
+                                "✕",
+                                0x00F7768E,
+                            );
                         }
                     }
 

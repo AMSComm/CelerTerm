@@ -667,6 +667,62 @@ fn test_japanese_and_cjk_preedit_display_width() {
 }
 
 #[test]
+fn test_search_shortcuts_translation() {
+    let cmd = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        logo: true,
+    };
+    let cmd_shift = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        logo: true,
+    };
+    let ctrl_shift = Modifiers {
+        alt: false,
+        ctrl: true,
+        shift: true,
+        logo: false,
+    };
+
+    // Cmd+F -> ToggleSearch
+    assert_eq!(
+        translate_key(&Key::Character("f".into()), cmd, true),
+        Some(KeyAction::ToggleSearch)
+    );
+    assert_eq!(
+        translate_key(&Key::Character("F".into()), cmd, true),
+        Some(KeyAction::ToggleSearch)
+    );
+
+    // Cmd+G -> FindNext
+    assert_eq!(
+        translate_key(&Key::Character("g".into()), cmd, true),
+        Some(KeyAction::FindNext)
+    );
+
+    // Cmd+Shift+G -> FindPrevious
+    assert_eq!(
+        translate_key(&Key::Character("G".into()), cmd_shift, true),
+        Some(KeyAction::FindPrevious)
+    );
+
+    // Ctrl+Shift+F -> ToggleSearch
+    assert_eq!(
+        translate_key(&Key::Character("F".into()), ctrl_shift, true),
+        Some(KeyAction::ToggleSearch)
+    );
+
+    // Ctrl+Shift+G -> FindPrevious
+    assert_eq!(
+        translate_key(&Key::Character("G".into()), ctrl_shift, true),
+        Some(KeyAction::FindPrevious)
+    );
+}
+
+#[test]
 fn test_workspace_modal_and_reload_config_shortcuts() {
     let cmd_shift = Modifiers {
         alt: false,

@@ -50,6 +50,9 @@ pub enum KeyAction {
     SelectRight,
     SelectUp,
     SelectDown,
+    ToggleSearch,
+    FindNext,
+    FindPrevious,
 }
 
 pub fn translate_key(key: &Key, mods: Modifiers, option_as_alt: bool) -> Option<KeyAction> {
@@ -110,6 +113,8 @@ pub fn translate_key_event_full(
                     "U" | "u" => return Some(KeyAction::CheckForUpdates),
                     "Q" | "q" => return Some(KeyAction::CloseAllWindows),
                     "D" | "d" => return Some(KeyAction::SplitPaneHorizontal),
+                    "G" | "g" => return Some(KeyAction::FindPrevious),
+                    "F" | "f" => return Some(KeyAction::ToggleSearch),
                     _ => {}
                 }
             }
@@ -120,6 +125,8 @@ pub fn translate_key_event_full(
                     "t" | "T" => return Some(KeyAction::NewTab),
                     "w" | "W" => return Some(KeyAction::CloseTab),
                     "d" | "D" => return Some(KeyAction::SplitPaneVertical),
+                    "f" | "F" => return Some(KeyAction::ToggleSearch),
+                    "g" | "G" => return Some(KeyAction::FindNext),
                     "[" => return Some(KeyAction::PreviousPane),
                     "]" => return Some(KeyAction::NextPane),
                     "q" | "Q" => return Some(KeyAction::Quit),
@@ -208,6 +215,8 @@ pub fn translate_key_event_full(
                 "Q" | "q" => return Some(KeyAction::CloseAllWindows),
                 "D" | "d" => return Some(KeyAction::SplitPaneVertical),
                 "H" | "h" => return Some(KeyAction::SplitPaneHorizontal),
+                "F" | "f" => return Some(KeyAction::ToggleSearch),
+                "G" | "g" => return Some(KeyAction::FindPrevious),
                 _ => {}
             }
         }
@@ -594,6 +603,9 @@ pub fn parse_action_string(val: &str, app_cursor: bool) -> Option<KeyAction> {
         "select_right" => Some(KeyAction::SelectRight),
         "select_up" => Some(KeyAction::SelectUp),
         "select_down" => Some(KeyAction::SelectDown),
+        "toggle_search" | "search" | "find" => Some(KeyAction::ToggleSearch),
+        "find_next" | "search_next" => Some(KeyAction::FindNext),
+        "find_previous" | "find_prev" | "search_prev" => Some(KeyAction::FindPrevious),
         "close_all_windows" | "quit_all" | "close_all" => Some(KeyAction::CloseAllWindows),
         "quit" => Some(KeyAction::Quit),
         "home" | "beginning_of_line" => {
