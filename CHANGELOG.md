@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-10-23
+
+### Added & Improved
+
+- **Interactive Terminal Search (Find in Terminal)**:
+  - Added native floating search bar (`Cmd+F` on macOS, `Ctrl+Shift+F` on Linux) with real-time incremental search across both viewport and scrollback history.
+  - Case-insensitive search with dynamic match counter (`X/Y` or `X/5000+` when capped).
+  - Match navigation via keyboard (`Enter` / `Cmd+G` for next, `Shift+Enter` / `Cmd+Shift+G` for previous) or search bar controls (`▲`, `▼`, `✕`), automatically scrolling off-screen matches into view.
+  - Two-tone highlight rendering: distinct amber highlight for normal matches and bright orange for the focused active match.
+  - Integrated 150ms keystroke debouncing for fluid typing, with instant 0ms execution on navigation, enter, and clipboard paste.
+  - Zero-allocation scan scratch buffers and O(log N) binary search line partitioning, eliminating render loop overhead on large scrollback histories.
+
+### Fixed & Improved
+
+- **Tab Title Overflow and Bounding Clipping**:
+  - Dynamically truncate tab titles (`format_tab_title_to_fit`) to fit within the actual available width of each tab, preventing title text from overlapping the close button (`x`) or leaking beyond the tab bar.
+  - Added pixel-level boundary clipping in `TextRenderer::draw_text_clipped`, completely preventing tab titles from spilling over or rendering to the right of the `+` (New Tab) button.
+
 ## [0.3.4] - 2026-10-21
 
 ### Fixed & Improved
