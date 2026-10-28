@@ -276,6 +276,14 @@ pub fn get_process_cwd(pid: u32) -> Option<PathBuf> {
     sys::get_process_cwd(pid)
 }
 
+pub fn get_raw_process_name(pid: u32) -> Option<String> {
+    sys::get_raw_process_name(pid)
+}
+
+pub fn get_child_pids(pid: u32) -> Vec<u32> {
+    sys::get_child_pids(pid)
+}
+
 pub fn get_process_name(pid: u32) -> Option<String> {
     let raw_name = sys::get_raw_process_name(pid)?;
     if !is_shell_name(&raw_name) {

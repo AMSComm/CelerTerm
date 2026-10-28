@@ -1443,6 +1443,49 @@ fn test_monospace_cell_alignment_and_ligature_separation() {
     assert_eq!(extracted_vi, "tiếngViệt");
 }
 
+#[test]
+fn test_toggle_resource_monitor_shortcuts() {
+    // 1. macOS Command+Shift+M
+    let mac_mods = Modifiers {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        logo: true,
+    };
+    let action_mac = translate_key(&Key::Character("m".into()), mac_mods, false);
+    assert_eq!(action_mac, Some(KeyAction::ToggleResourceMonitor));
+
+    let action_mac_upper = translate_key(&Key::Character("M".into()), mac_mods, false);
+    assert_eq!(action_mac_upper, Some(KeyAction::ToggleResourceMonitor));
+
+    // 2. Linux / Cross-platform Ctrl+Shift+M
+    let linux_mods = Modifiers {
+        alt: false,
+        ctrl: true,
+        shift: true,
+        logo: false,
+    };
+    let action_linux = translate_key(&Key::Character("m".into()), linux_mods, false);
+    assert_eq!(action_linux, Some(KeyAction::ToggleResourceMonitor));
+
+    let action_linux_upper = translate_key(&Key::Character("M".into()), linux_mods, false);
+    assert_eq!(action_linux_upper, Some(KeyAction::ToggleResourceMonitor));
+
+    // 3. String action parsing
+    assert_eq!(
+        celerterm::term::keymap::parse_action_string("toggle_resource_monitor", false),
+        Some(KeyAction::ToggleResourceMonitor)
+    );
+    assert_eq!(
+        celerterm::term::keymap::parse_action_string("resource_monitor", false),
+        Some(KeyAction::ToggleResourceMonitor)
+    );
+    assert_eq!(
+        celerterm::term::keymap::parse_action_string("task_manager", false),
+        Some(KeyAction::ToggleResourceMonitor)
+    );
+}
+
 
 
 

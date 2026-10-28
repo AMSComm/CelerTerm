@@ -158,6 +158,13 @@ impl Default for TabColorModalState {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ResourceMonitorModalState {
+    pub is_open: bool,
+    pub scroll_offset: usize,
+    pub snapshot: Option<crate::pty::resource::ResourceSnapshot>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DividerDragState {
     pub divider_id: usize,
@@ -186,6 +193,7 @@ pub struct CelerApp {
     workspace_modal: WorkspaceModalState,
     update_modal: UpdateModalState,
     tab_color_modal: TabColorModalState,
+    pub resource_modal: ResourceMonitorModalState,
     pub search_state: SearchState,
     pub search_debounce_deadline: Option<std::time::Instant>,
     app_menu_open: bool,
@@ -327,6 +335,7 @@ impl CelerApp {
             workspace_modal: WorkspaceModalState::default(),
             update_modal: UpdateModalState::default(),
             tab_color_modal: TabColorModalState::default(),
+            resource_modal: ResourceMonitorModalState::default(),
             search_state: SearchState::new(),
             search_debounce_deadline: None,
             app_menu_open: false,
@@ -606,6 +615,28 @@ impl CelerApp {
             .or_else(|| self.active_tab_id())
     }
 
+    pub fn notify_focus_change(&mut self, old_id: Option<&str>, new_id: Option<&str>) {
+        if old_id == new_id {
+            return;
+        }
+        if let Some(old) = old_id {
+            if let Some(session) = self.tab_sessions.get_mut(old) {
+                if session.screen.is_focus_reporting() {
+                    let _ = session.write_all(b"\x1b[O");
+                    let _ = session.flush();
+                }
+            }
+        }
+        if let Some(new) = new_id {
+            if let Some(session) = self.tab_sessions.get_mut(new) {
+                if session.screen.is_focus_reporting() {
+                    let _ = session.write_all(b"\x1b[I");
+                    let _ = session.flush();
+                }
+            }
+        }
+    }
+
     pub fn compute_tab_layout(
         workspace_mgr: &WorkspaceManager,
         window_config: &crate::config::schema::WindowConfig,
@@ -829,6 +860,7 @@ impl CelerApp {
                 }
             }
 
+            let old_focus = self.active_pane_or_tab_id();
             if let Some(target_id) = best_target {
                 self.workspace_mgr.focus_pane(&target_id);
             } else if dx > 0.0 || dy > 0.0 {
@@ -836,6 +868,8 @@ impl CelerApp {
             } else {
                 self.workspace_mgr.previous_pane();
             }
+            let new_focus = self.active_pane_or_tab_id();
+            self.notify_focus_change(old_focus.as_deref(), new_focus.as_deref());
 
             if let Some(ref win) = self.window {
                 win.request_redraw();
@@ -1137,6 +1171,7 @@ impl CelerApp {
     /// brings that window to front instead of switching locally.
     /// Returns true if switched locally, false if focused another window or failed.
     pub fn switch_or_focus_workspace(&mut self, target_id: &str) -> bool {
+        let old_focus = self.active_pane_or_tab_id();
         let target = match self.workspace_mgr.workspaces.iter().find(|w| w.id == target_id) {
             Some(w) => w,
             None => return false,
@@ -1155,6 +1190,8 @@ impl CelerApp {
         if self.workspace_mgr.switch_workspace(&target_id).is_ok() {
             self.activate_current_workspace_sessions();
             self.save_workspace_state();
+            let new_focus = self.active_pane_or_tab_id();
+            self.notify_focus_change(old_focus.as_deref(), new_focus.as_deref());
             true
         } else {
             false
@@ -1879,6 +1916,165 @@ impl CelerApp {
             _ => {}
         }
     }
+
+    pub fn toggle_resource_monitor(&mut self) {
+        if self.resource_modal.is_open {
+            self.resource_modal.is_open = false;
+        } else {
+            self.refresh_resource_snapshot();
+            self.resource_modal.is_open = true;
+            self.resource_modal.scroll_offset = 0;
+        }
+        if let Some(ref win) = self.window {
+            win.request_redraw();
+        }
+    }
+
+    pub fn refresh_resource_snapshot(&mut self) {
+        let mut snapshot = crate::pty::resource::ResourceSnapshot {
+            app_pid: std::process::id(),
+            captured_at: Some(std::time::Instant::now()),
+            ..Default::default()
+        };
+
+        if let Some(app_usage) = crate::pty::resource::get_single_process_usage(snapshot.app_pid, 0) {
+            snapshot.app_memory_bytes = app_usage.memory_bytes;
+            snapshot.app_cpu_time_ns = app_usage.cpu_time_ns;
+        }
+
+        let mut total_tree_mem: u64 = snapshot.app_memory_bytes;
+        let mut total_tree_cpu: u64 = snapshot.app_cpu_time_ns;
+        let mut total_tree_disk_r: u64 = 0;
+        let mut total_tree_disk_w: u64 = 0;
+
+        for ws in &self.workspace_mgr.workspaces {
+            let mut ws_res = crate::pty::resource::WorkspaceResource {
+                workspace_id: ws.id.clone(),
+                name: ws.name.clone(),
+                color: ws.color.clone(),
+                ..Default::default()
+            };
+
+            for tab in &ws.tabs {
+                let mut tab_res = crate::pty::resource::TabResource {
+                    tab_id: tab.id.clone(),
+                    title: tab.title.clone(),
+                    ..Default::default()
+                };
+
+                for pane_id in tab.all_pane_ids() {
+                    let root_pid = self.tab_sessions.get(&pane_id).and_then(|s| s.child_pid);
+                    let processes = if let Some(pid) = root_pid {
+                        crate::pty::resource::collect_process_tree(pid)
+                    } else {
+                        Vec::new()
+                    };
+
+                    let pane_mem: u64 = processes.iter().map(|p| p.memory_bytes).sum();
+                    let pane_cpu: u64 = processes.iter().map(|p| p.cpu_time_ns).sum();
+                    let pane_disk_r: u64 = processes.iter().map(|p| p.disk_read_bytes).sum();
+                    let pane_disk_w: u64 = processes.iter().map(|p| p.disk_write_bytes).sum();
+
+                    total_tree_mem = total_tree_mem.saturating_add(pane_mem);
+                    total_tree_cpu = total_tree_cpu.saturating_add(pane_cpu);
+                    total_tree_disk_r = total_tree_disk_r.saturating_add(pane_disk_r);
+                    total_tree_disk_w = total_tree_disk_w.saturating_add(pane_disk_w);
+
+                    let pane_title = if pane_id == tab.id {
+                        tab.title.clone()
+                    } else {
+                        format!("Pane {}", &pane_id[..pane_id.len().min(6)])
+                    };
+
+                    tab_res.total_memory_bytes = tab_res.total_memory_bytes.saturating_add(pane_mem);
+                    tab_res.total_cpu_time_ns = tab_res.total_cpu_time_ns.saturating_add(pane_cpu);
+                    tab_res.total_disk_read_bytes = tab_res.total_disk_read_bytes.saturating_add(pane_disk_r);
+                    tab_res.total_disk_write_bytes = tab_res.total_disk_write_bytes.saturating_add(pane_disk_w);
+
+                    tab_res.panes.push(crate::pty::resource::PaneResource {
+                        pane_id,
+                        title: pane_title,
+                        root_pid,
+                        total_memory_bytes: pane_mem,
+                        total_cpu_time_ns: pane_cpu,
+                        total_disk_read_bytes: pane_disk_r,
+                        total_disk_write_bytes: pane_disk_w,
+                        processes,
+                    });
+                }
+
+                ws_res.total_memory_bytes = ws_res.total_memory_bytes.saturating_add(tab_res.total_memory_bytes);
+                ws_res.total_cpu_time_ns = ws_res.total_cpu_time_ns.saturating_add(tab_res.total_cpu_time_ns);
+                ws_res.total_disk_read_bytes = ws_res.total_disk_read_bytes.saturating_add(tab_res.total_disk_read_bytes);
+                ws_res.total_disk_write_bytes = ws_res.total_disk_write_bytes.saturating_add(tab_res.total_disk_write_bytes);
+
+                ws_res.tabs.push(tab_res);
+            }
+
+            snapshot.workspaces.push(ws_res);
+        }
+
+        snapshot.total_tree_memory_bytes = total_tree_mem;
+        snapshot.total_tree_cpu_time_ns = total_tree_cpu;
+        snapshot.total_tree_disk_read_bytes = total_tree_disk_r;
+        snapshot.total_tree_disk_write_bytes = total_tree_disk_w;
+
+        self.resource_modal.snapshot = Some(snapshot);
+    }
+
+    fn handle_resource_modal_key(&mut self, key: &winit::keyboard::Key, code: Option<winit::keyboard::KeyCode>) {
+        match key {
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape) => {
+                self.resource_modal.is_open = false;
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
+                self.resource_modal.scroll_offset = self.resource_modal.scroll_offset.saturating_sub(1);
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowDown) => {
+                self.resource_modal.scroll_offset += 1;
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageUp) => {
+                self.resource_modal.scroll_offset = self.resource_modal.scroll_offset.saturating_sub(10);
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::PageDown) => {
+                self.resource_modal.scroll_offset += 10;
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => {
+                self.resource_modal.scroll_offset = 0;
+            }
+            winit::keyboard::Key::Character(s) => match s.as_str() {
+                "q" | "Q" => {
+                    self.resource_modal.is_open = false;
+                }
+                "r" | "R" => {
+                    self.refresh_resource_snapshot();
+                }
+                "k" | "K" => {
+                    self.resource_modal.scroll_offset = self.resource_modal.scroll_offset.saturating_sub(1);
+                }
+                "j" | "J" => {
+                    self.resource_modal.scroll_offset += 1;
+                }
+                _ => {}
+            },
+            _ => {
+                if let Some(c) = code {
+                    match c {
+                        winit::keyboard::KeyCode::KeyQ => {
+                            self.resource_modal.is_open = false;
+                        }
+                        winit::keyboard::KeyCode::KeyR | winit::keyboard::KeyCode::F5 => {
+                            self.refresh_resource_snapshot();
+                        }
+                        winit::keyboard::KeyCode::Escape => {
+                            self.resource_modal.is_open = false;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for CelerApp {
@@ -2095,7 +2291,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Focused(is_focused) => {
-                if let Some(active_id) = self.active_tab_id()
+                if let Some(active_id) = self.active_pane_or_tab_id()
                     && let Some(session) = self.tab_sessions.get_mut(&active_id)
                 {
                     if session.screen.is_focus_reporting() {
@@ -2229,7 +2425,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
 
                 if let Some(ref win) = self.window {
-                    if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.app_menu_open {
+                    if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.resource_modal.is_open || self.app_menu_open {
                         win.set_cursor(CursorIcon::Default);
                     } else if let Some(div) = hovered_divider {
                         match div.direction {
@@ -2343,7 +2539,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let _ = session.flush();
                         }
                     }
-                } else if (self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.app_menu_open)
+                } else if (self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.resource_modal.is_open || self.app_menu_open)
                     && let Some(ref win) = self.window
                 {
                     win.request_redraw();
@@ -2471,6 +2667,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         self.update_modal.scroll_offset = self.update_modal.scroll_offset.saturating_sub(lines.unsigned_abs() as usize);
                     } else if lines < 0 {
                         self.update_modal.scroll_offset += lines.unsigned_abs() as usize;
+                    }
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+                if self.resource_modal.is_open {
+                    if lines > 0 {
+                        self.resource_modal.scroll_offset = self.resource_modal.scroll_offset.saturating_sub(lines.unsigned_abs() as usize);
+                    } else if lines < 0 {
+                        self.resource_modal.scroll_offset += lines.unsigned_abs() as usize;
                     }
                     if let Some(ref win) = self.window {
                         win.request_redraw();
@@ -2647,6 +2854,62 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     window.request_redraw();
                                     return;
                                 }
+                            }
+                        }
+                        return;
+                    }
+
+                    if self.resource_modal.is_open {
+                        if button == MouseButton::Left {
+                            let (width, height) = (size.width as f32, size.height as f32);
+                            let scale = self.scale_factor;
+                            let modal_w = (760.0 * scale).min(width - 24.0);
+                            let modal_h = (500.0 * scale).min(height - 32.0);
+                            let modal_x = ((width - modal_w) * 0.5).max(10.0);
+                            let modal_y = ((height - modal_h) * 0.5).max(10.0);
+
+                            // Outside modal -> close
+                            if mx < modal_x || mx > modal_x + modal_w || my < modal_y || my > modal_y + modal_h {
+                                self.resource_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // Header close button / refresh area
+                            let header_h = (36.0 * scale).round();
+                            let hh_w = "[r] Refresh   [Esc] Close".len() as f32 * self.renderer.cell_width;
+                            let hh_x = modal_x + modal_w - hh_w - (16.0 * scale);
+                            if my >= modal_y && my <= modal_y + header_h && mx >= hh_x {
+                                let ref_w = "[r] Refresh".len() as f32 * self.renderer.cell_width;
+                                if mx <= hh_x + ref_w {
+                                    self.refresh_resource_snapshot();
+                                } else {
+                                    self.resource_modal.is_open = false;
+                                }
+                                window.request_redraw();
+                                return;
+                            }
+
+                            // Footer buttons
+                            let footer_h = (40.0 * scale).round();
+                            let footer_y = modal_y + modal_h - footer_h;
+                            let btn_h = (26.0 * scale).round();
+                            let btn_y = footer_y + ((footer_h - btn_h) * 0.5);
+
+                            let close_btn_w = (90.0 * scale).round();
+                            let close_btn_x = modal_x + modal_w - close_btn_w - (16.0 * scale);
+                            if mx >= close_btn_x && mx <= close_btn_x + close_btn_w && my >= btn_y && my <= btn_y + btn_h {
+                                self.resource_modal.is_open = false;
+                                window.request_redraw();
+                                return;
+                            }
+
+                            let ref_btn_w = (100.0 * scale).round();
+                            let ref_btn_x = close_btn_x - ref_btn_w - (8.0 * scale);
+                            if mx >= ref_btn_x && mx <= ref_btn_x + ref_btn_w && my >= btn_y && my <= btn_y + btn_h {
+                                self.refresh_resource_snapshot();
+                                window.request_redraw();
+                                return;
                             }
                         }
                         return;
@@ -3114,7 +3377,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let menu_w = (220.0 * scale).round();
                         let item_h = (28.0 * scale).round();
                         let menu_pad = (6.0 * scale).round();
-                        let menu_h = (6.0 * item_h) + (menu_pad * 2.0);
+                        let menu_h = (7.0 * item_h) + (menu_pad * 2.0);
                         let menu_btn = header.menu_button_rect;
                         let menu_x = (menu_btn.x + menu_btn.width - menu_w).max(8.0 * scale);
                         let menu_y = header.height + (2.0 * scale);
@@ -3135,16 +3398,19 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     }
                                 }
                                 2 => {
-                                    self.reload_config();
+                                    self.toggle_resource_monitor();
                                 }
                                 3 => {
+                                    self.reload_config();
+                                }
+                                4 => {
                                     self.close_all_windows(event_loop);
                                     return;
                                 }
-                                4 => {
+                                5 => {
                                     crate::update::open_browser(&format!("https://github.com/{}", crate::update::GITHUB_REPO));
                                 }
-                                5 => {
+                                6 => {
                                     self.update_modal.is_open = true;
                                     self.update_modal.state = crate::update::UpdateState::UpToDate {
                                         current_version: crate::update::CURRENT_VERSION.to_string(),
@@ -3532,6 +3798,17 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     return;
                 }
 
+                if self.resource_modal.is_open {
+                    self.handle_resource_modal_key(&logical_key, match physical_key {
+                        PhysicalKey::Code(c) => Some(c),
+                        _ => None,
+                    });
+                    if let Some(ref win) = window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 if self.tab_color_modal.is_open {
                     self.handle_tab_color_modal_key(&logical_key);
                     if let Some(ref win) = window {
@@ -3843,6 +4120,9 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             if let Some(ref win) = window {
                                 win.request_redraw();
                             }
+                        }
+                        KeyAction::ToggleResourceMonitor => {
+                            self.toggle_resource_monitor();
                         }
                         KeyAction::FindNext => {
                             self.search_next_match();
@@ -5055,7 +5335,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
 
 
                     // 4. Dim backdrop if any modal is open
-                    if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open {
+                    if self.workspace_modal.is_open || self.update_modal.is_open || self.tab_color_modal.is_open || self.resource_modal.is_open {
                         // Dim backdrop (50% opacity blend)
                         for pixel in buffer.iter_mut() {
                             let p = *pixel;
@@ -6054,6 +6334,319 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         }
                     }
 
+                    // 5.5 Render Resource Monitor Modal if open
+                    if self.resource_modal.is_open {
+                        let scale = self.scale_factor;
+                        let modal_w = (760.0 * scale).min(width as f32 - 24.0);
+                        let header_h = (36.0 * scale).round();
+                        let summary_h = (44.0 * scale).round();
+                        let footer_h = (40.0 * scale).round();
+                        let row_h = (26.0 * scale).round();
+                        let modal_h = (500.0 * scale).min(height as f32 - 32.0);
+
+                        let modal_x = ((width as f32 - modal_w) * 0.5).max(10.0);
+                        let modal_y = ((height as f32 - modal_h) * 0.5).max(10.0);
+
+                        // Modal background (#1A1B26)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            modal_h as usize,
+                            0x001A1B26,
+                        );
+
+                        // Modal border (#3B4261)
+                        draw_outline_rect(
+                            &mut buffer,
+                            (width, height),
+                            (modal_x as usize, modal_y as usize, modal_w as usize, modal_h as usize),
+                            1,
+                            0x003B4261,
+                        );
+
+                        // Header strip (#24283B)
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            modal_y as usize,
+                            modal_w as usize,
+                            header_h as usize,
+                            0x0024283B,
+                        );
+                        let head_text_y = modal_y + ((header_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x + (16.0 * scale),
+                            head_text_y,
+                            "Activity & Resource Monitor",
+                            0x00C0CAF5,
+                        );
+
+                        // Header actions right side: [r] Refresh   [Esc] Close
+                        let header_hint = "[r] Refresh   [Esc] Close";
+                        let hh_w = header_hint.len() as f32 * self.renderer.cell_width;
+                        let hh_x = modal_x + modal_w - hh_w - (16.0 * scale);
+                        self.renderer.draw_text(
+                            &mut buffer,
+                            width,
+                            height,
+                            hh_x,
+                            head_text_y,
+                            header_hint,
+                            0x00787C99,
+                        );
+
+                        // Summary bar (#16161E)
+                        let sum_y = modal_y + header_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            sum_y as usize,
+                            modal_w as usize,
+                            summary_h as usize,
+                            0x0016161E,
+                        );
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            (sum_y + summary_h - 1.0) as usize,
+                            modal_w as usize,
+                            1,
+                            0x00292E42,
+                        );
+
+                        if let Some(ref snap) = self.resource_modal.snapshot {
+                            let sum_text_y = sum_y + ((summary_h - self.renderer.cell_height) * 0.5);
+                            let mem_str = format!("Memory: {}", crate::pty::resource::format_bytes(snap.total_tree_memory_bytes));
+                            let app_str = format!("(CelerTerm: {})", crate::pty::resource::format_bytes(snap.app_memory_bytes));
+                            let cpu_str = format!("CPU Time: {}", crate::pty::resource::format_duration_ns(snap.total_tree_cpu_time_ns));
+                            let disk_str = format!(
+                                "Disk Read/Write: {} / {}",
+                                crate::pty::resource::format_bytes(snap.total_tree_disk_read_bytes),
+                                crate::pty::resource::format_bytes(snap.total_tree_disk_write_bytes)
+                            );
+
+                            let col1_x = modal_x + (16.0 * scale);
+                            let col2_x = col1_x + (260.0 * scale);
+                            let col3_x = col2_x + (180.0 * scale);
+
+                            self.renderer.draw_text(&mut buffer, width, height, col1_x, sum_text_y, &format!("{} {}", mem_str, app_str), 0x007AA2F7);
+                            self.renderer.draw_text(&mut buffer, width, height, col2_x, sum_text_y, &cpu_str, 0x009ECE6A);
+                            self.renderer.draw_text(&mut buffer, width, height, col3_x, sum_text_y, &disk_str, 0x00E0AF68);
+                        }
+
+                        // Column Header Strip
+                        let col_hdr_y = sum_y + summary_h;
+                        let col_hdr_h = (24.0 * scale).round();
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            col_hdr_y as usize,
+                            modal_w as usize,
+                            col_hdr_h as usize,
+                            0x001F2335,
+                        );
+                        let ch_text_y = col_hdr_y + ((col_hdr_h - self.renderer.cell_height) * 0.5);
+                        let name_col_x = modal_x + (16.0 * scale);
+                        let pid_col_x = modal_x + (340.0 * scale);
+                        let mem_col_x = modal_x + (430.0 * scale);
+                        let cpu_col_x = modal_x + (540.0 * scale);
+                        let disk_col_x = modal_x + (640.0 * scale);
+
+                        self.renderer.draw_text(&mut buffer, width, height, name_col_x, ch_text_y, "TARGET / PROCESS", 0x00787C99);
+                        self.renderer.draw_text(&mut buffer, width, height, pid_col_x, ch_text_y, "PID", 0x00787C99);
+                        self.renderer.draw_text(&mut buffer, width, height, mem_col_x, ch_text_y, "MEMORY", 0x00787C99);
+                        self.renderer.draw_text(&mut buffer, width, height, cpu_col_x, ch_text_y, "CPU TIME", 0x00787C99);
+                        self.renderer.draw_text(&mut buffer, width, height, disk_col_x, ch_text_y, "DISK I/O", 0x00787C99);
+
+                        // Content List
+                        let content_y = col_hdr_y + col_hdr_h;
+                        let content_h = modal_y + modal_h - footer_h - content_y;
+                        let visible_rows = (content_h / row_h).floor() as usize;
+
+                        enum RowItem {
+                            WorkspaceHeader { name: String, color: u32, memory: u64, cpu: u64, disk: u64 },
+                            TabHeader { title: String, memory: u64, cpu: u64 },
+                            Process { name: String, pid: u32, memory: u64, cpu: u64, disk_r: u64, disk_w: u64, is_child: bool },
+                            EmptyTab,
+                        }
+
+                        let mut rows = Vec::new();
+                        if let Some(ref snap) = self.resource_modal.snapshot {
+                            for ws in &snap.workspaces {
+                                let ws_color = ws.color.as_deref()
+                                    .map(|c| crate::renderer::color::parse_hex_color(c, 0x007AA2F7))
+                                    .unwrap_or(0x007AA2F7);
+                                rows.push(RowItem::WorkspaceHeader {
+                                    name: ws.name.clone(),
+                                    color: ws_color,
+                                    memory: ws.total_memory_bytes,
+                                    cpu: ws.total_cpu_time_ns,
+                                    disk: ws.total_disk_read_bytes.saturating_add(ws.total_disk_write_bytes),
+                                });
+
+                                for tab in &ws.tabs {
+                                    rows.push(RowItem::TabHeader {
+                                        title: tab.title.clone(),
+                                        memory: tab.total_memory_bytes,
+                                        cpu: tab.total_cpu_time_ns,
+                                    });
+
+                                    let mut has_procs = false;
+                                    for pane in &tab.panes {
+                                        for (p_idx, proc) in pane.processes.iter().enumerate() {
+                                            has_procs = true;
+                                            rows.push(RowItem::Process {
+                                                name: proc.name.clone(),
+                                                pid: proc.pid,
+                                                memory: proc.memory_bytes,
+                                                cpu: proc.cpu_time_ns,
+                                                disk_r: proc.disk_read_bytes,
+                                                disk_w: proc.disk_write_bytes,
+                                                is_child: p_idx > 0,
+                                            });
+                                        }
+                                    }
+                                    if !has_procs {
+                                        rows.push(RowItem::EmptyTab);
+                                    }
+                                }
+                            }
+                        }
+
+                        let max_scroll = rows.len().saturating_sub(visible_rows);
+                        let scroll_offset = self.resource_modal.scroll_offset.min(max_scroll);
+
+                        for (i, row) in rows.iter().skip(scroll_offset).take(visible_rows).enumerate() {
+                            let ry = content_y + (i as f32 * row_h);
+                            let r_text_y = ry + ((row_h - self.renderer.cell_height) * 0.5);
+
+                            match row {
+                                RowItem::WorkspaceHeader { name, color, memory, cpu, disk } => {
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        modal_x as usize,
+                                        ry as usize,
+                                        modal_w as usize,
+                                        row_h as usize,
+                                        0x0024283B,
+                                    );
+                                    TextRenderer::draw_rect(
+                                        &mut buffer,
+                                        width,
+                                        height,
+                                        modal_x as usize,
+                                        (ry + row_h - 1.0) as usize,
+                                        modal_w as usize,
+                                        1,
+                                        0x00292E42,
+                                    );
+                                    let ws_label = format!("● Workspace: {}", name);
+                                    self.renderer.draw_text_clipped(&mut buffer, width, height, name_col_x, r_text_y, &ws_label, *color, pid_col_x - (8.0 * scale));
+                                    self.renderer.draw_text(&mut buffer, width, height, mem_col_x, r_text_y, &crate::pty::resource::format_bytes(*memory), 0x00C0CAF5);
+                                    self.renderer.draw_text(&mut buffer, width, height, cpu_col_x, r_text_y, &crate::pty::resource::format_duration_ns(*cpu), 0x009ECE6A);
+                                    self.renderer.draw_text(&mut buffer, width, height, disk_col_x, r_text_y, &crate::pty::resource::format_bytes(*disk), 0x00E0AF68);
+                                }
+                                RowItem::TabHeader { title, memory, cpu } => {
+                                    let tab_label = format!("  ▸ Tab: {}", title);
+                                    self.renderer.draw_text_clipped(&mut buffer, width, height, name_col_x, r_text_y, &tab_label, 0x00BB9AF7, pid_col_x - (8.0 * scale));
+                                    self.renderer.draw_text(&mut buffer, width, height, mem_col_x, r_text_y, &crate::pty::resource::format_bytes(*memory), 0x00A9B1D6);
+                                    self.renderer.draw_text(&mut buffer, width, height, cpu_col_x, r_text_y, &crate::pty::resource::format_duration_ns(*cpu), 0x00787C99);
+                                }
+                                RowItem::Process { name, pid, memory, cpu, disk_r, disk_w, is_child } => {
+                                    let prefix = if *is_child { "      └ " } else { "    ↳ " };
+                                    let proc_label = format!("{}{}", prefix, name);
+                                    let pid_label = format!("{}", pid);
+                                    let mem_label = crate::pty::resource::format_bytes(*memory);
+                                    let cpu_label = crate::pty::resource::format_duration_ns(*cpu);
+                                    let disk_label = if *disk_r > 0 || *disk_w > 0 {
+                                        format!("{}/{}", crate::pty::resource::format_bytes(*disk_r), crate::pty::resource::format_bytes(*disk_w))
+                                    } else {
+                                        "-".to_string()
+                                    };
+
+                                    let fg = if *is_child { 0x00C0CAF5 } else { 0x007AA2F7 };
+                                    self.renderer.draw_text_clipped(&mut buffer, width, height, name_col_x, r_text_y, &proc_label, fg, pid_col_x - (8.0 * scale));
+                                    self.renderer.draw_text(&mut buffer, width, height, pid_col_x, r_text_y, &pid_label, 0x00565F89);
+                                    self.renderer.draw_text(&mut buffer, width, height, mem_col_x, r_text_y, &mem_label, 0x009ECE6A);
+                                    self.renderer.draw_text(&mut buffer, width, height, cpu_col_x, r_text_y, &cpu_label, 0x00E0AF68);
+                                    self.renderer.draw_text(&mut buffer, width, height, disk_col_x, r_text_y, &disk_label, 0x00787C99);
+                                }
+                                RowItem::EmptyTab => {
+                                    self.renderer.draw_text(&mut buffer, width, height, name_col_x + (32.0 * scale), r_text_y, "(No active child processes)", 0x00565F89);
+                                }
+                            }
+                        }
+
+                        // Footer Toolbar (#1F2335)
+                        let footer_y = modal_y + modal_h - footer_h;
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            footer_y as usize,
+                            modal_w as usize,
+                            footer_h as usize,
+                            0x001F2335,
+                        );
+                        TextRenderer::draw_rect(
+                            &mut buffer,
+                            width,
+                            height,
+                            modal_x as usize,
+                            footer_y as usize,
+                            modal_w as usize,
+                            1,
+                            0x00292E42,
+                        );
+
+                        let foot_text_y = footer_y + ((footer_h - self.renderer.cell_height) * 0.5);
+                        let nav_hint = "Scroll: [▲▼] [PageUp/Dn]   Refresh: [r]   Close: [Esc] / [q]";
+                        self.renderer.draw_text(&mut buffer, width, height, modal_x + (16.0 * scale), foot_text_y, nav_hint, 0x00787C99);
+
+                        // Buttons on right: [r] Refresh  [Esc] Close
+                        let btn_h = (26.0 * scale).round();
+                        let btn_y = footer_y + ((footer_h - btn_h) * 0.5);
+                        let (mx, my) = (self.mouse_pos.0 as f32, self.mouse_pos.1 as f32);
+
+                        let close_btn_w = (90.0 * scale).round();
+                        let close_btn_x = modal_x + modal_w - close_btn_w - (16.0 * scale);
+                        let is_close_h = mx >= close_btn_x && mx <= close_btn_x + close_btn_w && my >= btn_y && my <= btn_y + btn_h;
+                        TextRenderer::draw_rect(&mut buffer, width, height, close_btn_x as usize, btn_y as usize, close_btn_w as usize, btn_h as usize, if is_close_h { 0x00283457 } else { 0x0024283B });
+                        draw_outline_rect(&mut buffer, (width, height), (close_btn_x as usize, btn_y as usize, close_btn_w as usize, btn_h as usize), 1, if is_close_h { 0x007AA2F7 } else { 0x003B4261 });
+                        let cb_tw = "[Esc] Close".len() as f32 * self.renderer.cell_width;
+                        let cb_tx = close_btn_x + ((close_btn_w - cb_tw) * 0.5).max(0.0);
+                        let cb_ty = btn_y + ((btn_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(&mut buffer, width, height, cb_tx, cb_ty, "[Esc] Close", 0x00C0CAF5);
+
+                        let ref_btn_w = (100.0 * scale).round();
+                        let ref_btn_x = close_btn_x - ref_btn_w - (8.0 * scale);
+                        let is_ref_h = mx >= ref_btn_x && mx <= ref_btn_x + ref_btn_w && my >= btn_y && my <= btn_y + btn_h;
+                        TextRenderer::draw_rect(&mut buffer, width, height, ref_btn_x as usize, btn_y as usize, ref_btn_w as usize, btn_h as usize, if is_ref_h { 0x00283457 } else { 0x0024283B });
+                        draw_outline_rect(&mut buffer, (width, height), (ref_btn_x as usize, btn_y as usize, ref_btn_w as usize, btn_h as usize), 1, if is_ref_h { 0x009ECE6A } else { 0x003B4261 });
+                        let rb_tw = "[r] Refresh".len() as f32 * self.renderer.cell_width;
+                        let rb_tx = ref_btn_x + ((ref_btn_w - rb_tw) * 0.5).max(0.0);
+                        let rb_ty = btn_y + ((btn_h - self.renderer.cell_height) * 0.5).max(0.0);
+                        self.renderer.draw_text(&mut buffer, width, height, rb_tx, rb_ty, "[r] Refresh", 0x009ECE6A);
+                    }
+
                     // 6. Render Dropdown App Menu if open
                     if self.app_menu_open {
                         let scale = self.scale_factor;
@@ -6063,7 +6656,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                         let menu_btn = header.menu_button_rect;
                         let menu_x = (menu_btn.x + menu_btn.width - menu_w).max(8.0 * scale);
                         let menu_y = header.height + (2.0 * scale);
-                        let menu_h = (6.0 * item_h) + (menu_pad * 2.0);
+                        let menu_h = (7.0 * item_h) + (menu_pad * 2.0);
 
                         // Menu background (#1F2335)
                         TextRenderer::draw_rect(
@@ -6085,15 +6678,16 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             0x003B4261,
                         );
 
-                        let (sc_u, sc_o, sc_r, sc_q_all) = if cfg!(target_os = "macos") {
-                            ("⌘⇧U", "⌘⇧O", "⌘⇧R", "⌘⇧Q")
+                        let (sc_u, sc_o, sc_m, sc_r, sc_q_all) = if cfg!(target_os = "macos") {
+                            ("⌘⇧U", "⌘⇧O", "⌘⇧M", "⌘⇧R", "⌘⇧Q")
                         } else {
-                            ("Ctrl+Shift+U", "Ctrl+Shift+O", "Ctrl+Shift+R", "Ctrl+Shift+Q")
+                            ("Ctrl+Shift+U", "Ctrl+Shift+O", "Ctrl+Shift+M", "Ctrl+Shift+R", "Ctrl+Shift+Q")
                         };
 
-                        let menu_items: [(&str, &str); 6] = [
+                        let menu_items: [(&str, &str); 7] = [
                             ("Check for Updates...", sc_u),
                             ("Workspaces", sc_o),
+                            ("Activity & Resources", sc_m),
                             ("Reload Config", sc_r),
                             ("Close All Windows", sc_q_all),
                             ("GitHub Repository", ""),

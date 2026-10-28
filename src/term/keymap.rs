@@ -51,6 +51,7 @@ pub enum KeyAction {
     SelectUp,
     SelectDown,
     ToggleSearch,
+    ToggleResourceMonitor,
     FindNext,
     FindPrevious,
 }
@@ -115,6 +116,7 @@ pub fn translate_key_event_full(
                     "D" | "d" => return Some(KeyAction::SplitPaneHorizontal),
                     "G" | "g" => return Some(KeyAction::FindPrevious),
                     "F" | "f" => return Some(KeyAction::ToggleSearch),
+                    "M" | "m" => return Some(KeyAction::ToggleResourceMonitor),
                     _ => {}
                 }
             }
@@ -216,6 +218,7 @@ pub fn translate_key_event_full(
                 "D" | "d" => return Some(KeyAction::SplitPaneVertical),
                 "H" | "h" => return Some(KeyAction::SplitPaneHorizontal),
                 "F" | "f" => return Some(KeyAction::ToggleSearch),
+                "M" | "m" => return Some(KeyAction::ToggleResourceMonitor),
                 "G" | "g" => return Some(KeyAction::FindPrevious),
                 _ => {}
             }
@@ -604,6 +607,7 @@ pub fn parse_action_string(val: &str, app_cursor: bool) -> Option<KeyAction> {
         "select_up" => Some(KeyAction::SelectUp),
         "select_down" => Some(KeyAction::SelectDown),
         "toggle_search" | "search" | "find" => Some(KeyAction::ToggleSearch),
+        "toggle_resource_monitor" | "resource_monitor" | "task_manager" => Some(KeyAction::ToggleResourceMonitor),
         "find_next" | "search_next" => Some(KeyAction::FindNext),
         "find_previous" | "find_prev" | "search_prev" => Some(KeyAction::FindPrevious),
         "close_all_windows" | "quit_all" | "close_all" => Some(KeyAction::CloseAllWindows),
