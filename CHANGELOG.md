@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-10-28
+
+### Added & Improved
+
+- **Per-Workspace & Per-Tab Activity & Resource Monitor (Task Manager Modal)**:
+  - Added dedicated Task Manager modal overlay (`Cmd+Shift+M` on macOS, `Ctrl+Shift+M` on Linux, or via `☰` menu -> `Activity & Resources...`).
+  - Hierarchical tree breakdown displaying resource usage grouped by Workspace -> Tab -> Panes and child processes (`zsh`, `nvim`, `rust-analyzer`, etc.).
+  - Detailed metrics: Physical RAM Footprint / RSS, CPU execution time, and Disk Read/Write throughput.
+  - Native cross-platform implementation with zero external crate dependencies: uses `proc_pid_rusage` on macOS and `/proc` filesystem on Linux.
+  - On-demand sampling and instant manual refresh (`[r]` key or button), with full keyboard & mouse wheel navigation.
+
+- **Seamless Terminal Focus Reporting for Neovim and External Tools**:
+  - Implemented dynamic focus event sequence dispatch (`\x1b[I` FocusGained, `\x1b[O` FocusLost) across tab switching, pane clicks, keyboard navigation, and workspace transitions.
+  - Fixed active pane target identification in `WindowEvent::Focused` so split panes reliably forward focus notifications.
+  - Ensures Neovim and other TUI applications instantly detect file changes modified externally (such as by AI assistants or background compilers) without requiring buffer re-opening.
+
 ## [0.3.5] - 2026-10-23
 
 ### Added & Improved
