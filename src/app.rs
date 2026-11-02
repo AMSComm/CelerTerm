@@ -56,6 +56,7 @@ pub struct TabSession {
     pub master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     pub child_pid: Option<u32>,
     pub last_foreground_pid: Option<u32>,
+    pub last_dynamic_title: Option<String>,
 }
 
 impl TabSession {
@@ -598,6 +599,7 @@ impl CelerApp {
             master: pty.master,
             child_pid,
             last_foreground_pid: None,
+            last_dynamic_title: None,
         };
 
         self.tab_sessions.insert(tab_id.to_string(), session);
@@ -987,7 +989,8 @@ impl CelerApp {
 
         for session in self.tab_sessions.values() {
             let fg_pid = session.foreground_process_id();
-            if fg_pid != session.last_foreground_pid || session.screen.dynamic_title().is_some() {
+            let dyn_title = session.screen.dynamic_title();
+            if fg_pid != session.last_foreground_pid || dyn_title != session.last_dynamic_title {
                 any_fg_changed = true;
             }
             if let Some(fpid) = fg_pid
@@ -1014,10 +1017,6 @@ impl CelerApp {
         self.last_title_update = Some(now);
         self.has_pending_title_update = false;
 
-        for session in self.tab_sessions.values_mut() {
-            session.last_foreground_pid = session.foreground_process_id();
-        }
-
         let mut any_title_changed = any_fg_changed;
 
         for ws in &mut self.workspace_mgr.workspaces {
@@ -1030,7 +1029,7 @@ impl CelerApp {
                 let tree = tab.pane_tree.as_mut().unwrap();
                 for pane in tree.all_panes_mut() {
                     if let Some(session) = self.tab_sessions.get_mut(&pane.id) {
-                        let fg_pid = session.last_foreground_pid;
+                        let fg_pid = session.foreground_process_id();
                         let child_pid = session.child_pid;
 
                         // Update live cwd of the shell process
@@ -1071,6 +1070,11 @@ impl CelerApp {
                     any_title_changed = true;
                 }
             }
+        }
+
+        for session in self.tab_sessions.values_mut() {
+            session.last_foreground_pid = session.foreground_process_id();
+            session.last_dynamic_title = session.screen.dynamic_title();
         }
 
         any_title_changed
@@ -4334,10 +4338,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 self.has_pending_redraw = false;
 
                 if self.is_occluded {
-                    if let Some(active_id) = self.active_tab_id()
-                        && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                    if let Some(active_ws) = self.workspace_mgr.get_active_workspace()
+                        && let Some(active_tab) = active_ws.get_active_tab()
                     {
-                        session.screen.dirty = false;
+                        for pane_id in active_tab.all_pane_ids() {
+                            if let Some(session) = self.tab_sessions.get_mut(&pane_id) {
+                                session.screen.dirty = false;
+                            }
+                        }
                     }
                     return;
                 }
@@ -4351,10 +4359,14 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                     let height = win_size.height as usize;
 
                     if width == 0 || height == 0 {
-                        if let Some(active_id) = self.active_tab_id()
-                            && let Some(session) = self.tab_sessions.get_mut(&active_id)
+                        if let Some(active_ws) = self.workspace_mgr.get_active_workspace()
+                            && let Some(active_tab) = active_ws.get_active_tab()
                         {
-                            session.screen.dirty = false;
+                            for pane_id in active_tab.all_pane_ids() {
+                                if let Some(session) = self.tab_sessions.get_mut(&pane_id) {
+                                    session.screen.dirty = false;
+                                }
+                            }
                         }
                         return;
                     }
@@ -7088,9 +7100,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
             return;
         }
 
-        let is_dirty = self.active_tab_id()
-            .and_then(|id| self.tab_sessions.get(&id))
-            .map(|s| s.screen.dirty)
+        let is_dirty = self.workspace_mgr.get_active_workspace()
+            .and_then(|ws| ws.get_active_tab())
+            .map(|tab| {
+                tab.all_pane_ids().iter().any(|pane_id| {
+                    self.tab_sessions.get(pane_id).map(|s| s.screen.dirty).unwrap_or(false)
+                })
+            })
             .unwrap_or(false);
 
         let mut target_flow;

@@ -1311,6 +1311,40 @@ fn test_immediate_tab_title_update_on_process_exit() {
     assert_ne!(active_title, "sleep", "Tab title must no longer be the exited process name");
 }
 
+#[test]
+fn test_dynamic_title_does_not_busy_loop_when_unchanged() {
+    use celerterm::app::CelerApp;
+
+    let mut app = CelerApp::new();
+    let tab_id = app.workspace_mgr.get_active_workspace().unwrap().tabs[0].id.clone();
+    app.spawn_tab_session(&tab_id, None).expect("spawn session succeeds");
+
+    // 1. Initial title update should succeed and not be throttled
+    let changed1 = app.update_tab_titles();
+    assert!(changed1);
+
+    // 2. Simulate an SSH session setting a dynamic title
+    let session = app.tab_sessions.get_mut(&tab_id).unwrap();
+    session.screen.process_bytes(b"\x1b]0;user@remote-host\x07");
+
+    // 3. First call after dynamic title arrived should detect the transition
+    let changed2 = app.update_tab_titles();
+    assert!(changed2, "Dynamic title arrival must trigger update");
+
+    // 4. Subsequent calls with unchanged dynamic title MUST NOT report changed (prevents 100% CPU redraw loop)
+    let changed3 = app.update_tab_titles();
+    assert!(!changed3, "Unchanged dynamic title must not re-trigger title change in idle loop");
+
+    // 5. Test when dynamic title is retained (as in an active SSH session)
+    let session = app.tab_sessions.get_mut(&tab_id).unwrap();
+    session.screen.process_bytes(b"\x1b]0;remote-user@host\x07");
+    session.last_dynamic_title = session.screen.dynamic_title();
+
+    // With dynamic title already matching last_dynamic_title, update_tab_titles must NOT report changed
+    let changed_idle = app.update_tab_titles();
+    assert!(!changed_idle, "Matching dynamic title must not re-trigger title change in idle loop");
+}
+
 
 
 
