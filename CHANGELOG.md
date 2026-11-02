@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-11-02
+
+### Fixed & Improved
+
+- **Prevent Dynamic Title Redraw Busy-Loop and 100% CPU Saturation**:
+  - Track `last_dynamic_title` in `TabSession` so unchanged dynamic titles (such as OSC title sequences emitted during remote SSH sessions) do not perpetually mark foreground processes as changed.
+  - Fix infinite redraw loop in `about_to_wait()` that caused CelerTerm instances running SSH sessions to spin at 100% CPU.
+  - Eliminate focus event latency and window manager race conditions (such as AeroSpace workspace switching bounce-backs) caused by QuartzCore main thread event starvation.
+
+- **Split Pane Dirty State Synchronization**:
+  - Ensure dirty state across all active pane trees (`all_pane_ids()`) is properly checked and cleared during occlusion and frame rendering, preventing unnecessary redraw requests.
+
 ## [0.3.6] - 2026-10-28
 
 ### Added & Improved
