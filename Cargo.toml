@@ -24,6 +24,8 @@ env_logger = "0.11"
 parking_lot = "0.12"
 unicode-width = "0.1"
 rustix = { version = "0.38", features = ["std", "termios", "process"] }
+signal-hook = "0.3"
+libc = "0.2"
 softbuffer = "0.4.8"
 arboard = "3.6.1"
 

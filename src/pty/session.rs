@@ -108,6 +108,13 @@ impl PtySession {
             None
         }
     }
+
+    pub fn terminate(&mut self) {
+        if let Some(pid) = self.child_pid.take() {
+            let fg_pid = self.foreground_process_id();
+            crate::pty::terminate_process_tree_graceful(pid, fg_pid, 100);
+        }
+    }
 }
 
 pub fn get_bootstrapped_path() -> String {

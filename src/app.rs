@@ -57,6 +57,7 @@ pub struct TabSession {
     pub child_pid: Option<u32>,
     pub last_foreground_pid: Option<u32>,
     pub last_dynamic_title: Option<String>,
+    pub is_terminated: bool,
 }
 
 impl TabSession {
@@ -80,6 +81,34 @@ impl TabSession {
         {
             None
         }
+    }
+
+    pub fn terminate(&mut self) {
+        if self.is_terminated {
+            return;
+        }
+        self.is_terminated = true;
+        let fg_pid = self.foreground_process_id();
+        if let Some(child_pid) = self.child_pid.take() {
+            crate::pty::terminate_process_tree_graceful(child_pid, fg_pid, 200);
+        }
+    }
+
+    pub fn terminate_sync(&mut self) {
+        if self.is_terminated {
+            return;
+        }
+        self.is_terminated = true;
+        let fg_pid = self.foreground_process_id();
+        if let Some(child_pid) = self.child_pid.take() {
+            crate::pty::terminate_process_tree_sync(child_pid, fg_pid);
+        }
+    }
+}
+
+impl Drop for TabSession {
+    fn drop(&mut self) {
+        self.terminate();
     }
 }
 
@@ -555,7 +584,10 @@ impl CelerApp {
             }
         }
 
-        let child_pid = pty.child_pid;
+        let child_pid = pty.child_pid.take();
+        if let Some(pid) = child_pid {
+            crate::pty::register_active_session_pid(pid);
+        }
         if let Some(proxy) = &self.proxy {
             let proxy_clone = proxy.clone();
             let thread_tab_id = tab_id.to_string();
@@ -600,6 +632,7 @@ impl CelerApp {
             child_pid,
             last_foreground_pid: None,
             last_dynamic_title: None,
+            is_terminated: false,
         };
 
         self.tab_sessions.insert(tab_id.to_string(), session);
@@ -1251,11 +1284,20 @@ impl CelerApp {
         }
     }
 
+    pub fn terminate_all_sessions(&mut self) {
+        for session in self.tab_sessions.values_mut() {
+            session.terminate_sync();
+        }
+        self.tab_sessions.clear();
+        crate::pty::terminate_all_registered_sessions_sync();
+    }
+
     pub fn close_all_windows(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         self.save_workspace_state();
         let my_pid = std::process::id();
         crate::workspace::close_all_other_instances(my_pid);
         crate::workspace::unregister_all_instances();
+        self.terminate_all_sessions();
         event_loop.exit();
     }
 
@@ -1853,6 +1895,7 @@ impl CelerApp {
                 }
 
                 crate::workspace::unregister_active_instance(my_pid);
+                self.terminate_all_sessions();
 
                 if let Err(e) = crate::update::apply_update_and_restart(
                     &staged_path,
@@ -7165,6 +7208,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
         self.save_workspace_state();
         crate::workspace::unregister_active_instance(std::process::id());
+        self.terminate_all_sessions();
     }
 }
 
@@ -7172,12 +7216,14 @@ impl Drop for CelerApp {
     fn drop(&mut self) {
         self.save_workspace_state();
         crate::workspace::unregister_active_instance(std::process::id());
+        self.terminate_all_sessions();
     }
 }
 
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     crate::pty::bootstrap_env_path();
+    crate::pty::setup_process_signal_handler();
     crate::window::disable_app_nap();
     let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     event_loop.set_control_flow(ControlFlow::Wait);

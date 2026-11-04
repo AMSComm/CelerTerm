@@ -353,7 +353,7 @@ pub fn generate_restart_script(
         } else {
             let pids_str = other_pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
             format!(
-                "for p in {pids}; do kill -TERM $p 2>/dev/null; done; \
+                "for p in {pids}; do kill -TERM $p 2>/dev/null; pkill -HUP -P $p 2>/dev/null; done; \
                  for i in $(seq 1 40); do \
                      alive=0; \
                      for p in {pids}; do \
@@ -362,7 +362,7 @@ pub fn generate_restart_script(
                      if [ $alive -eq 0 ]; then break; fi; \
                      sleep 0.05; \
                  done; \
-                 for p in {pids}; do kill -9 $p 2>/dev/null; done; ",
+                 for p in {pids}; do kill -9 $p 2>/dev/null; pkill -KILL -P $p 2>/dev/null; done; ",
                 pids = pids_str
             )
         };
@@ -416,7 +416,7 @@ pub fn generate_restart_script(
         } else {
             let pids_str = other_pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
             format!(
-                "for p in {pids}; do kill -TERM $p 2>/dev/null; done; \
+                "for p in {pids}; do kill -TERM $p 2>/dev/null; pkill -HUP -P $p 2>/dev/null; done; \
                  for i in $(seq 1 40); do \
                      alive=0; \
                      for p in {pids}; do \
@@ -425,7 +425,7 @@ pub fn generate_restart_script(
                      if [ $alive -eq 0 ]; then break; fi; \
                      sleep 0.05; \
                  done; \
-                 for p in {pids}; do kill -9 $p 2>/dev/null; done; ",
+                 for p in {pids}; do kill -9 $p 2>/dev/null; pkill -KILL -P $p 2>/dev/null; done; ",
                 pids = pids_str
             )
         };

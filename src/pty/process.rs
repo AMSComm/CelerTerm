@@ -178,6 +178,53 @@ mod sys {
             pids[..count].iter().filter(|&&p| p > 0).map(|&p| p as u32).collect()
         }
     }
+
+    const PROC_PIDTBSDINFO: c_int = 3;
+    const SZOMB: u32 = 5;
+
+    #[repr(C)]
+    struct ProcBsdInfo {
+        pbi_flags: u32,
+        pbi_status: u32,
+        pbi_xstatus: u32,
+        pbi_pid: u32,
+        pbi_ppid: u32,
+        pbi_uid: u32,
+        pbi_gid: u32,
+        pbi_ruid: u32,
+        pbi_rgid: u32,
+        pbi_svuid: u32,
+        pbi_svgid: u32,
+        pbi_rfu1: u32,
+        pbi_comm: [c_char; 16],
+        pbi_name: [c_char; 32],
+        pbi_nfiles: u32,
+        pbi_pgid: u32,
+        pbi_pjobc: u32,
+        pbi_e_tdev: u32,
+        pbi_e_tpgid: u32,
+        pbi_nice: i32,
+        pbi_start_tvsec: u64,
+        pbi_start_tvusec: u64,
+    }
+
+    pub fn is_process_zombie(pid: u32) -> bool {
+        unsafe {
+            let mut info: ProcBsdInfo = std::mem::zeroed();
+            let size = std::mem::size_of::<ProcBsdInfo>() as c_int;
+            let ret = proc_pidinfo(
+                pid as c_int,
+                PROC_PIDTBSDINFO,
+                0,
+                &mut info as *mut _ as *mut c_void,
+                size,
+            );
+            if ret > 0 {
+                return info.pbi_status == SZOMB;
+            }
+        }
+        false
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -214,6 +261,17 @@ mod sys {
         }
         Vec::new()
     }
+
+    pub fn is_process_zombie(pid: u32) -> bool {
+        if let Ok(content) = fs::read_to_string(format!("/proc/{}/status", pid)) {
+            for line in content.lines() {
+                if line.starts_with("State:") && line.contains('Z') {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -223,6 +281,7 @@ mod sys {
     pub fn get_raw_process_name(_pid: u32) -> Option<String> { None }
     pub fn get_process_args(_pid: u32) -> Option<Vec<String>> { None }
     pub fn get_child_pids(_pid: u32) -> Vec<u32> { Vec::new() }
+    pub fn is_process_zombie(_pid: u32) -> bool { false }
 }
 
 pub fn is_shell_name(name: &str) -> bool {
@@ -454,3 +513,312 @@ pub fn extract_ssh_process_or_title(t: &str) -> String {
         trimmed.to_string()
     }
 }
+
+/// Recursively collects all descendant process IDs for a given root PID.
+pub fn collect_descendant_pids(root_pid: u32) -> Vec<u32> {
+    if root_pid == 0 {
+        return Vec::new();
+    }
+    let mut all = Vec::new();
+    let mut queue = vec![root_pid];
+    while let Some(pid) = queue.pop() {
+        let children = get_child_pids(pid);
+        for child in children {
+            if child != 0 && child != root_pid && !all.contains(&child) {
+                all.push(child);
+                queue.push(child);
+            }
+        }
+    }
+    all
+}
+
+#[cfg(unix)]
+pub fn send_signal_to_pid_or_group(pid: u32, signal: rustix::process::Signal) {
+    if pid == 0 {
+        return;
+    }
+    if let Some(p) = rustix::process::Pid::from_raw(pid as i32) {
+        // Attempt to signal the process group:
+        let _ = rustix::process::kill_process_group(p, signal);
+        // Also signal the process directly:
+        let _ = rustix::process::kill_process(p, signal);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn send_signal_to_pid_or_group(_pid: u32) {}
+
+#[cfg(unix)]
+pub fn reap_zombie(pid: u32) {
+    if pid > 0 {
+        unsafe {
+            let mut status: libc::c_int = 0;
+            libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn reap_zombie(_pid: u32) {}
+
+#[cfg(unix)]
+pub fn is_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+
+    // 1. If it is our direct child, try non-blocking waitpid to reap it if it exited
+    unsafe {
+        let mut status: libc::c_int = 0;
+        let res = libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG);
+        if res > 0 {
+            return false;
+        }
+    }
+
+    // 2. Check if the process exists in the OS process table
+    if let Some(p) = rustix::process::Pid::from_raw(pid as i32) {
+        if rustix::process::test_kill_process(p).is_err() {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    // 3. Platform check for zombie state
+    !sys::is_process_zombie(pid)
+}
+
+#[cfg(not(unix))]
+pub fn is_pid_alive(_pid: u32) -> bool {
+    false
+}
+
+static ACTIVE_SESSION_PIDS: parking_lot::Mutex<Vec<(u32, Option<u32>)>> =
+    parking_lot::Mutex::new(Vec::new());
+
+pub fn register_active_session_pid(root_pid: u32) {
+    if root_pid == 0 {
+        return;
+    }
+    let mut list = ACTIVE_SESSION_PIDS.lock();
+    if !list.iter().any(|(r, _)| *r == root_pid) {
+        list.push((root_pid, None));
+    }
+}
+
+pub fn update_active_session_fg_pid(root_pid: u32, fg_pid: Option<u32>) {
+    if root_pid == 0 {
+        return;
+    }
+    let mut list = ACTIVE_SESSION_PIDS.lock();
+    if let Some(entry) = list.iter_mut().find(|(r, _)| *r == root_pid) {
+        entry.1 = fg_pid;
+    }
+}
+
+pub fn unregister_active_session_pid(root_pid: u32) {
+    if root_pid == 0 {
+        return;
+    }
+    let mut list = ACTIVE_SESSION_PIDS.lock();
+    list.retain(|(r, _)| *r != root_pid);
+}
+
+/// Terminate all registered child sessions synchronously. Used on app exit, window close, or signal.
+pub fn terminate_all_registered_sessions_sync() {
+    let sessions: Vec<(u32, Option<u32>)> = {
+        let mut list = ACTIVE_SESSION_PIDS.lock();
+        std::mem::take(&mut *list)
+    };
+
+    if sessions.is_empty() {
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        let mut all_pids_to_clean = Vec::new();
+        for (root_pid, fg_pid) in &sessions {
+            let tree = collect_descendant_pids(*root_pid);
+            if let Some(fg) = fg_pid {
+                send_signal_to_pid_or_group(*fg, rustix::process::Signal::Hup);
+                all_pids_to_clean.push(*fg);
+            }
+            send_signal_to_pid_or_group(*root_pid, rustix::process::Signal::Hup);
+            all_pids_to_clean.push(*root_pid);
+            for p in tree {
+                send_signal_to_pid_or_group(p, rustix::process::Signal::Hup);
+                all_pids_to_clean.push(p);
+            }
+        }
+
+        // Brief delay to allow graceful SIGHUP handling
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Escalate remaining to SIGTERM
+        let mut still_alive = Vec::new();
+        for p in all_pids_to_clean {
+            if is_pid_alive(p) && !still_alive.contains(&p) {
+                send_signal_to_pid_or_group(p, rustix::process::Signal::Term);
+                still_alive.push(p);
+            }
+        }
+
+        if !still_alive.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            // Force SIGKILL for stubborn processes
+            for p in still_alive {
+                if is_pid_alive(p) {
+                    send_signal_to_pid_or_group(p, rustix::process::Signal::Kill);
+                }
+            }
+        }
+    }
+}
+
+/// Gracefully terminates a process tree in the background (SIGHUP -> SIGTERM after timeout_ms -> SIGKILL).
+pub fn terminate_process_tree_graceful(root_pid: u32, fg_pid: Option<u32>, timeout_ms: u64) {
+    if root_pid == 0 {
+        return;
+    }
+    unregister_active_session_pid(root_pid);
+
+    #[cfg(unix)]
+    {
+        let tree = collect_descendant_pids(root_pid);
+
+        // Immediate SIGHUP
+        if let Some(fg) = fg_pid {
+            send_signal_to_pid_or_group(fg, rustix::process::Signal::Hup);
+        }
+        send_signal_to_pid_or_group(root_pid, rustix::process::Signal::Hup);
+        for &p in &tree {
+            send_signal_to_pid_or_group(p, rustix::process::Signal::Hup);
+        }
+
+        std::thread::Builder::new()
+            .name("celerterm-proc-cleanup".to_string())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(timeout_ms));
+
+                let mut still_alive = Vec::new();
+                if let Some(fg) = fg_pid
+                    && is_pid_alive(fg)
+                {
+                    still_alive.push(fg);
+                }
+                if is_pid_alive(root_pid) {
+                    still_alive.push(root_pid);
+                }
+                for &p in &tree {
+                    if is_pid_alive(p) && !still_alive.contains(&p) {
+                        still_alive.push(p);
+                    }
+                }
+
+                if still_alive.is_empty() {
+                    return;
+                }
+
+                // Escalate to SIGTERM
+                for &p in &still_alive {
+                    send_signal_to_pid_or_group(p, rustix::process::Signal::Term);
+                }
+
+                // Wait 100ms
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // Escalate to SIGKILL for any stubborn survivors
+                for &p in &still_alive {
+                    if is_pid_alive(p) {
+                        send_signal_to_pid_or_group(p, rustix::process::Signal::Kill);
+                    }
+                    reap_zombie(p);
+                }
+                reap_zombie(root_pid);
+            })
+            .ok();
+    }
+}
+
+/// Synchronously terminates a process tree (SIGHUP -> 50ms -> SIGTERM -> 50ms -> SIGKILL).
+pub fn terminate_process_tree_sync(root_pid: u32, fg_pid: Option<u32>) {
+    if root_pid == 0 {
+        return;
+    }
+    unregister_active_session_pid(root_pid);
+
+    #[cfg(unix)]
+    {
+        let tree = collect_descendant_pids(root_pid);
+
+        if let Some(fg) = fg_pid {
+            send_signal_to_pid_or_group(fg, rustix::process::Signal::Hup);
+        }
+        send_signal_to_pid_or_group(root_pid, rustix::process::Signal::Hup);
+        for &p in &tree {
+            send_signal_to_pid_or_group(p, rustix::process::Signal::Hup);
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let mut still_alive = Vec::new();
+        if let Some(fg) = fg_pid
+            && is_pid_alive(fg)
+        {
+            still_alive.push(fg);
+        }
+        if is_pid_alive(root_pid) {
+            still_alive.push(root_pid);
+        }
+        for &p in &tree {
+            if is_pid_alive(p) && !still_alive.contains(&p) {
+                still_alive.push(p);
+            }
+        }
+
+        if !still_alive.is_empty() {
+            for &p in &still_alive {
+                send_signal_to_pid_or_group(p, rustix::process::Signal::Term);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            for &p in &still_alive {
+                if is_pid_alive(p) {
+                    send_signal_to_pid_or_group(p, rustix::process::Signal::Kill);
+                }
+                reap_zombie(p);
+            }
+        }
+        reap_zombie(root_pid);
+    }
+}
+
+/// Registers a signal handler for SIGTERM and SIGINT on Unix to guarantee cleanup on external termination.
+#[cfg(unix)]
+pub fn setup_process_signal_handler() {
+    static INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if INITIALIZED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("celerterm-sig-handler".to_string())
+        .spawn(|| {
+            use signal_hook::consts::signal::{SIGINT, SIGTERM};
+            use signal_hook::iterator::Signals;
+
+            if let Ok(mut signals) = Signals::new([SIGTERM, SIGINT]) {
+                if let Some(sig) = signals.forever().next() {
+                    log::info!("Received signal {}, terminating child sessions...", sig);
+                    terminate_all_registered_sessions_sync();
+                    std::process::exit(128 + sig);
+                }
+            }
+        })
+        .ok();
+}
+
+#[cfg(not(unix))]
+pub fn setup_process_signal_handler() {}

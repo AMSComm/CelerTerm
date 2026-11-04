@@ -6,6 +6,10 @@ pub use session::{PtySession, bootstrap_env_path, get_bootstrapped_path};
 pub use process::{
     format_tab_title, format_tab_title_to_fit, truncate_tab_title, MAX_TAB_TITLE_CHARS, get_process_cwd, get_process_name,
     get_raw_process_name, get_child_pids, extract_command_from_shell_args, is_generic_runner, is_shell_name,
+    collect_descendant_pids, send_signal_to_pid_or_group, is_pid_alive,
+    register_active_session_pid, update_active_session_fg_pid, unregister_active_session_pid,
+    terminate_all_registered_sessions_sync, terminate_process_tree_graceful, terminate_process_tree_sync,
+    setup_process_signal_handler,
 };
 pub use resource::{
     ResourceSnapshot, WorkspaceResource, TabResource, PaneResource, ProcessUsage,
