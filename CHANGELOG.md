@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-11-04
+
+### Fixed & Improved
+
+- **Automatic Child Process Lifecycle & Graceful Termination**:
+  - Automatically terminate orphaned child processes (interactive shells, foreground applications, background services, build tools) whenever a tab or split pane is closed.
+  - Implemented an escalating signal termination protocol: immediate `SIGHUP` to process groups to permit graceful shutdown and session saves, escalating to `SIGTERM` after 200ms, and `SIGKILL` for stubborn survivors, with automatic zombie reaping.
+  - Added synchronous process tree termination across all workspaces upon application exit, window closure (`Cmd+Q`), and prior to auto-updater restart swaps.
+  - Registered global session PID tracking and Unix `SIGTERM` / `SIGINT` handlers to ensure clean process termination even when CelerTerm is terminated externally.
+
+- **Auto-Update Process Isolation Hardening**:
+  - Hardened auto-updater restart script on macOS and Linux with `pkill -HUP -P` and `pkill -KILL -P` cascading signals across instance PIDs to eliminate lingering background processes during version upgrades.
+
 ## [0.3.7] - 2026-11-02
 
 ### Fixed & Improved
