@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-11-16
+
+### Fixed & Improved
+
+- **Terminal Search Buffer & Navigation**:
+  - Support full search matching across terminal lines wrapped via `WRAPLINE` flags.
+  - Implement NFC Unicode normalization (`unicode-normalization`) to accurately match decomposed characters (such as combined Vietnamese tone marks).
+  - Include zerowidth characters when slicing search matches to avoid multi-codepoint display offsets.
+  - Add search bar cursor navigation via Left/Right arrow keys, Home, End, Backspace, and Delete.
+  - Prevent IME composition events from leaking into the PTY while the search bar is active.
+  - Increase maximum search match capacity to 20,000 matches.
+  - Implement viewport-aware scrolling: only adjust the scroll offset if the current match is outside the visible viewport, avoiding unnecessary viewport jumps when navigating visible matches.
+
+- **Mouse Wheel Scroll & Mouse Mode Bypass**:
+  - Support `Shift + MouseWheel` bypass to scroll the terminal scrollback buffer and reveal the scrollbar even when foreground applications enable SGR mouse tracking (e.g., Claude Code, Vim, Tmux) or Alternate Screen.
+  - Maintain history viewport scrolling with the mouse wheel while `display_offset > 0` before returning control to application mouse reporting.
+
 ## [0.3.8] - 2026-11-04
 
 ### Fixed & Improved
