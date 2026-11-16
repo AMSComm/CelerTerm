@@ -1674,6 +1674,7 @@ impl CelerApp {
                         let first_line = sel.lines().next().unwrap_or("").trim().to_string();
                         if !first_line.is_empty() && first_line.len() <= 100 {
                             self.search_state.query = first_line;
+                            self.search_state.cursor_pos = self.search_state.query.chars().count();
                         }
                     }
                 }
@@ -1691,7 +1692,7 @@ impl CelerApp {
         if let Some(active_id) = self.active_pane_or_tab_id() {
             if let Some(session) = self.tab_sessions.get_mut(&active_id) {
                 self.search_state.update_matches(&session.screen);
-                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.display_offset(), session.screen.size.lines, session.screen.history_size()) {
                     session.screen.scroll_to_offset(offset);
                 }
             }
@@ -1709,7 +1710,7 @@ impl CelerApp {
         if let Some(active_id) = self.active_pane_or_tab_id() {
             if let Some(session) = self.tab_sessions.get_mut(&active_id) {
                 self.search_state.next_match();
-                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.display_offset(), session.screen.size.lines, session.screen.history_size()) {
                     session.screen.scroll_to_offset(offset);
                 }
             }
@@ -1727,7 +1728,7 @@ impl CelerApp {
         if let Some(active_id) = self.active_pane_or_tab_id() {
             if let Some(session) = self.tab_sessions.get_mut(&active_id) {
                 self.search_state.prev_match();
-                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.size.lines, session.screen.history_size()) {
+                if let Some(offset) = self.search_state.scroll_offset_for_current_match(session.screen.display_offset(), session.screen.size.lines, session.screen.history_size()) {
                     session.screen.scroll_to_offset(offset);
                 }
             }
@@ -1756,15 +1757,42 @@ impl CelerApp {
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowUp) => {
                 self.search_prev_match();
             }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => {
+                self.search_state.move_cursor_left();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => {
+                self.search_state.move_cursor_right();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Home) => {
+                self.search_state.move_cursor_home();
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::End) => {
+                self.search_state.move_cursor_end();
+            }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::Backspace) => {
-                self.search_state.query.pop();
-                if self.search_state.query.is_empty() {
-                    self.search_debounce_deadline = None;
-                    self.search_state.matches.clear();
-                    self.search_state.current_match_idx = None;
-                    self.search_state.is_capped = false;
-                } else {
-                    self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+                if self.search_state.delete_backward() {
+                    if self.search_state.query.is_empty() {
+                        self.search_debounce_deadline = None;
+                        self.search_state.matches.clear();
+                        self.search_state.current_match_idx = None;
+                        self.search_state.total_match_count = 0;
+                        self.search_state.is_capped = false;
+                    } else {
+                        self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+                    }
+                }
+            }
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Delete) => {
+                if self.search_state.delete_forward() {
+                    if self.search_state.query.is_empty() {
+                        self.search_debounce_deadline = None;
+                        self.search_state.matches.clear();
+                        self.search_state.current_match_idx = None;
+                        self.search_state.total_match_count = 0;
+                        self.search_state.is_capped = false;
+                    } else {
+                        self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+                    }
                 }
             }
             winit::keyboard::Key::Named(winit::keyboard::NamedKey::F3) => {
@@ -1796,7 +1824,7 @@ impl CelerApp {
                             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                 if let Ok(text) = clipboard.get_text() {
                                     let clean: String = text.chars().filter(|c| !c.is_control() || *c == ' ').take(100).collect();
-                                    self.search_state.query.push_str(&clean);
+                                    self.search_state.insert_str(&clean);
                                     self.flush_search();
                                 }
                             }
@@ -1811,15 +1839,56 @@ impl CelerApp {
                         _ => {}
                     }
                 } else {
-                    self.search_state.query.push_str(s);
+                    self.search_state.insert_str(s);
                     self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
                 }
             }
             _ => {
                 if let Some(c) = code {
-                    if c == winit::keyboard::KeyCode::Escape {
-                        self.search_debounce_deadline = None;
-                        self.search_state.close();
+                    match c {
+                        winit::keyboard::KeyCode::Escape => {
+                            self.search_debounce_deadline = None;
+                            self.search_state.close();
+                        }
+                        winit::keyboard::KeyCode::ArrowLeft => {
+                            self.search_state.move_cursor_left();
+                        }
+                        winit::keyboard::KeyCode::ArrowRight => {
+                            self.search_state.move_cursor_right();
+                        }
+                        winit::keyboard::KeyCode::Home => {
+                            self.search_state.move_cursor_home();
+                        }
+                        winit::keyboard::KeyCode::End => {
+                            self.search_state.move_cursor_end();
+                        }
+                        winit::keyboard::KeyCode::Backspace => {
+                            if self.search_state.delete_backward() {
+                                if self.search_state.query.is_empty() {
+                                    self.search_debounce_deadline = None;
+                                    self.search_state.matches.clear();
+                                    self.search_state.current_match_idx = None;
+                                    self.search_state.total_match_count = 0;
+                                    self.search_state.is_capped = false;
+                                } else {
+                                    self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+                                }
+                            }
+                        }
+                        winit::keyboard::KeyCode::Delete => {
+                            if self.search_state.delete_forward() {
+                                if self.search_state.query.is_empty() {
+                                    self.search_debounce_deadline = None;
+                                    self.search_state.matches.clear();
+                                    self.search_state.current_match_idx = None;
+                                    self.search_state.total_match_count = 0;
+                                    self.search_state.is_capped = false;
+                                } else {
+                                    self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -2593,6 +2662,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Ime(Ime::Commit(text)) => {
+                if self.search_state.is_open {
+                    self.ime_preedit = None;
+                    self.last_preedit = None;
+                    let clean: String = text.chars().filter(|c| !c.is_control() || *c == ' ').collect();
+                    self.search_state.insert_str(&clean);
+                    self.search_debounce_deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(150));
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 let had_preedit = self.ime_preedit.is_some()
                     || self.last_preedit.as_ref().map(|(_, t)| t.elapsed() < std::time::Duration::from_millis(1000)).unwrap_or(false);
                 let preedit_text = self.ime_preedit.as_ref().map(|(s, _)| s.clone())
@@ -2673,6 +2754,18 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                 }
             }
             WindowEvent::Ime(Ime::Preedit(text, cursor_range)) => {
+                if self.search_state.is_open {
+                    if text.is_empty() {
+                        self.ime_preedit = None;
+                    } else {
+                        self.ime_preedit = Some((text, cursor_range));
+                    }
+                    if let Some(ref win) = self.window {
+                        win.request_redraw();
+                    }
+                    return;
+                }
+
                 // Ignore dead-key composition preedits (e.g. Option+E acute '´') when Option as Alt is active
                 if self.modifiers.alt_key() && self.config.macos.option_as_alt {
                     return;
@@ -4761,8 +4854,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             } else {
                                 &[]
                             };
-                            let active_match = if is_focused && self.search_state.is_open {
-                                self.search_state.current_match()
+                            let active_group_id = if is_focused && self.search_state.is_open {
+                                self.search_state.current_match_idx
                             } else {
                                 None
                             };
@@ -4772,8 +4865,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 let is_selected = selection_range.as_ref().map(|sr| sr.contains(point)).unwrap_or(false);
                                 let search_hl = if row_search_matches.is_empty() {
                                     None
-                                } else if let Some(am) = active_match {
-                                    if am.line == grid_line && col >= am.start_col && col < am.end_col {
+                                } else if let Some(active_gid) = active_group_id {
+                                    if row_search_matches.iter().any(|m| m.match_group_id == active_gid && col >= m.start_col && col < m.end_col) {
                                         Some(MatchHighlightType::Active)
                                     } else if row_search_matches.iter().any(|m| col >= m.start_col && col < m.end_col) {
                                         Some(MatchHighlightType::Normal)
@@ -4838,8 +4931,13 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 break;
                             }
                             let grid_line = Line(line_idx as i32 - display_offset as i32);
-                            let active_match = if is_focused && self.search_state.is_open {
-                                self.search_state.current_match()
+                            let row_search_matches = if is_focused && self.search_state.is_open {
+                                self.search_state.matches_for_line(grid_line)
+                            } else {
+                                &[]
+                            };
+                            let active_group_id = if is_focused && self.search_state.is_open {
+                                self.search_state.current_match_idx
                             } else {
                                 None
                             };
@@ -4847,8 +4945,8 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             let mut col = 0;
                             while col < cols {
                                 let (c, fg_col, bg_col) = active_session.screen.get_render_cell(col, line_idx);
-                                let is_active_search_match = match active_match {
-                                    Some(am) => am.line == grid_line && col >= am.start_col && col < am.end_col,
+                                let is_active_search_match = match active_group_id {
+                                    Some(gid) => row_search_matches.iter().any(|m| m.match_group_id == gid && col >= m.start_col && col < m.end_col),
                                     None => false,
                                 };
                                 let fg_u32 = if is_active_search_match {
@@ -5286,19 +5384,19 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                     &self.search_state.query,
                                     0x00C0CAF5,
                                 );
-                                let cursor_x = text_x + (self.search_state.query.chars().count() as f32 * self.renderer.cell_width);
-                                if cursor_x + 2.0 <= layout.input_box.x + layout.input_box.width {
-                                    TextRenderer::draw_rect(
-                                        &mut buffer,
-                                        width,
-                                        height,
-                                        cursor_x as usize,
-                                        (layout.input_box.y + 2.0) as usize,
-                                        2,
-                                        (layout.input_box.height - 4.0).max(1.0) as usize,
-                                        0x007AA2F7,
-                                    );
-                                }
+                            }
+                            let cursor_x = text_x + (self.search_state.cursor_pos as f32 * self.renderer.cell_width);
+                            if cursor_x + 2.0 <= layout.input_box.x + layout.input_box.width {
+                                TextRenderer::draw_rect(
+                                    &mut buffer,
+                                    width,
+                                    height,
+                                    cursor_x as usize,
+                                    (layout.input_box.y + 2.0) as usize,
+                                    2,
+                                    (layout.input_box.height - 4.0).max(1.0) as usize,
+                                    0x007AA2F7,
+                                );
                             }
 
                             // 3. Counter box
