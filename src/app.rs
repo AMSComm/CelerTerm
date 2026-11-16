@@ -2844,7 +2844,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             header_h + pad_y
                         });
 
-                        if session.screen.is_mouse_mode() {
+                        if session.screen.is_mouse_mode() && !self.modifiers.shift_key() && session.screen.display_offset() == 0 {
                             let col = (((self.mouse_pos.0 as f32 - pane_x) / self.renderer.cell_width).floor() as i32 + 1)
                                 .clamp(1, session.screen.size.columns as i32) as usize;
                             let row = (((self.mouse_pos.1 as f32 - pane_y) / self.renderer.cell_height).floor() as i32 + 1)
@@ -2857,7 +2857,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                                 let _ = session.write_all(payload.as_bytes());
                             }
                             let _ = session.flush();
-                        } else if session.screen.is_alt_screen() {
+                        } else if session.screen.is_alt_screen() && !self.modifiers.shift_key() {
                             // Alternate screen without mouse mode: lines > 0 is scroll up (Up Arrow), lines < 0 is scroll down (Down Arrow)
                             let arrow = if lines > 0 { b"\x1b[A" } else { b"\x1b[B" };
                             for _ in 0..lines.abs().min(5) {
@@ -2865,7 +2865,7 @@ impl ApplicationHandler<UserEvent> for CelerApp {
                             }
                             let _ = session.flush();
                         } else {
-                            // Normal shell: lines > 0 scrolls up into history (+lines), lines < 0 scrolls down to prompt (-lines)
+                            // Normal shell or Shift/history bypass: lines > 0 scrolls up into history (+lines), lines < 0 scrolls down to prompt (-lines)
                             session.screen.scroll_display(lines);
                             self.last_scrollbar_activity.insert(pane_id.clone(), std::time::Instant::now());
                             if let Some(ref win) = self.window {
